@@ -2,7 +2,7 @@
 //!
 //! 会话模型（docs/DESIGN.md §6.1）：
 //! - 雨课堂凭证：内存 `sessions`（user_id → cookie 头），服务重启即失效
-//! - 本站会话：签名 cookie `sid`（auth::token），14 天滑动续期
+//! - 本站会话：签名 cookie `sid`（auth::token），滑动续期（TTL 可配置）
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -21,7 +21,6 @@ use crate::config::Config;
 use crate::error::AppError;
 
 pub const SESSION_COOKIE: &str = "sid";
-pub const SESSION_TTL_SECS: u64 = 14 * 24 * 60 * 60; // 14 天，对齐雨课堂 sessionid
 
 /// 全局应用状态
 pub struct AppState {
@@ -166,12 +165,15 @@ fn session_response(st: &AppState, session: yk_client::Session) -> Response {
         .insert(session.user_id, session.cookie_header.clone());
     let sid = token::issue(
         session.user_id,
-        now_unix() + SESSION_TTL_SECS,
+        now_unix() + st.config.cookie_ttl_secs,
         &st.config.server_secret,
     );
     (
         StatusCode::OK,
-        [(header::SET_COOKIE, session_cookie(&sid, SESSION_TTL_SECS))],
+        [(
+            header::SET_COOKIE,
+            session_cookie(&sid, st.config.cookie_ttl_secs),
+        )],
         Json(json!({
             "code": 0, "msg": "ok",
             "data": { "user_id": session.user_id }
@@ -185,18 +187,12 @@ async fn me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Result<Respo
     let user_id = token::verify(&sid, now_unix(), &st.config.server_secret)
         .map_err(|_| AppError::Unauthorized)?;
 
-    // 14 天滑动续期：每次活跃访问重签 cookie
-    let renewed = token::issue(
-        user_id,
-        now_unix() + SESSION_TTL_SECS,
-        &st.config.server_secret,
-    );
+    // 滑动续期：每次活跃访问按配置 TTL 重签 cookie
+    let ttl = st.config.cookie_ttl_secs;
+    let renewed = token::issue(user_id, now_unix() + ttl, &st.config.server_secret);
 
     Ok((
-        [(
-            header::SET_COOKIE,
-            session_cookie(&renewed, SESSION_TTL_SECS),
-        )],
+        [(header::SET_COOKIE, session_cookie(&renewed, ttl))],
         Json(json!({
             "code": 0, "msg": "ok",
             "data": { "user_id": user_id }
@@ -229,6 +225,7 @@ mod tests {
             config: Config {
                 server_secret: "test-secret".into(),
                 port: 3000,
+                cookie_ttl_secs: 14 * 24 * 60 * 60,
                 captcha_app_id: "2091064951".into(),
                 yk_base_url: yk_base.into(),
                 yk_allowed_hosts: vec!["www.yuketang.cn".into()],
@@ -286,7 +283,7 @@ mod tests {
             .to_str()
             .unwrap();
         assert!(set_cookie.starts_with("sid="));
-        assert!(set_cookie.contains(&format!("Max-Age={SESSION_TTL_SECS}")));
+        assert!(set_cookie.contains(&format!("Max-Age={}", 14 * 24 * 60 * 60)));
         let renewed = set_cookie
             .split(';')
             .next()
@@ -409,6 +406,7 @@ mod tests {
             config: Config {
                 server_secret: "test-secret".into(),
                 port: 3000,
+                cookie_ttl_secs: 14 * 24 * 60 * 60,
                 captcha_app_id: "2091064951".into(),
                 yk_base_url: server.uri(),
                 yk_allowed_hosts: vec![],

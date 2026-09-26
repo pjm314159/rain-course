@@ -43,6 +43,9 @@ fn build_app(cfg: Arc<Config>) -> Router {
 
 #[tokio::main]
 async fn main() {
+    // 加载根目录 .env（存在时）
+    dotenvy::dotenv().ok();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
