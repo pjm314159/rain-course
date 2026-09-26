@@ -46,19 +46,31 @@ async fn main() {
     // 加载根目录 .env（存在时）
     dotenvy::dotenv().ok();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,tower_http=info".into()),
-        )
-        .init();
-
     let cfg = Arc::new(Config::from_env());
+
+    // 双通道日志：stdout（开发）+ 按天滚动文件（持久化，logs/rain-course.YYYY-MM-DD）
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "info,tower_http=info".into());
+    let file_appender = tracing_appender::rolling::daily(&cfg.log_dir, "rain-course.log");
+    let (file_writer, _log_guard) = tracing_appender::non_blocking(file_appender);
+    use tracing_subscriber::prelude::*;
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(file_writer),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+    tracing::info!(log_dir = %cfg.log_dir, "persistent logging initialized");
+
     let port = cfg.port;
     tracing::info!(
         yk_base_url = %cfg.yk_base_url,
         allowed_hosts = ?cfg.yk_allowed_hosts,
         captcha_app_id = %cfg.captcha_app_id,
+        cookie_ttl_secs = cfg.cookie_ttl_secs,
         "configuration loaded"
     );
     let app = build_app(cfg);

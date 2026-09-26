@@ -18,6 +18,8 @@ pub struct Config {
     pub captcha_app_id: String,
     pub yk_base_url: String,
     pub yk_allowed_hosts: Vec<String>,
+    /// 日志文件目录（按天滚动）
+    pub log_dir: String,
 }
 
 impl Config {
@@ -40,6 +42,7 @@ impl Config {
                 &lookup("YK_ALLOWED_HOSTS")
                     .unwrap_or_else(|| "www.yuketang.cn,pro.yuketang.cn".into()),
             ),
+            log_dir: lookup("LOG_DIR").unwrap_or_else(|| "logs".into()),
         }
     }
 

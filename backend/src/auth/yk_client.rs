@@ -201,8 +201,16 @@ impl YkClient {
             .json()
             .await
             .map_err(|e| AppError::Internal(e.into()))?;
+        // 实测（2026-09-26）：扫码确认后 data 直接携带用户信息 {"id":"96796676",...}
         match map_envelope(envelope) {
-            Ok(_) => {
+            Ok(data) => {
+                if let Some(user_id) = parse_user_id(&data) {
+                    return Ok(QrPoll::Success(Session {
+                        user_id,
+                        cookie_header: cookies,
+                    }));
+                }
+                // 兜底：data 无 id 时用 user_info 探测
                 let user_id = self.whoami(&cookies).await?;
                 Ok(QrPoll::Success(Session {
                     user_id,
@@ -261,6 +269,15 @@ impl YkClient {
             user_id,
             cookie_header: cookies,
         })
+    }
+}
+
+/// 从响应 data 里解析 user_id（实测为字符串形式的数字，兼容数字）
+fn parse_user_id(data: &Value) -> Option<i64> {
+    match data.get("id") {
+        Some(Value::String(s)) => s.parse().ok(),
+        Some(Value::Number(n)) => n.as_i64(),
+        _ => None,
     }
 }
 
@@ -473,7 +490,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn qr_poll_success_returns_session() {
+    async fn qr_poll_success_parses_user_id_from_data_directly() {
+        // 实测结构：data.id 为字符串数字，无需再调 user_info
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/user/login"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({
+                        "code": 0, "msg": "OK",
+                        "data": {"id": "96796676", "avatar": "", "name": "", "school": ""}
+                    }))
+                    .append_header("Set-Cookie", "sessionid=qr88; Path=/"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = YkClient::new(&server.uri());
+        match client.qr_poll("tok1").await.unwrap() {
+            QrPoll::Success(s) => {
+                assert_eq!(s.user_id, 96796676);
+                assert_eq!(s.cookie_header, "sessionid=qr88");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn qr_poll_success_without_id_falls_back_to_user_info() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/api/v3/user/login"))

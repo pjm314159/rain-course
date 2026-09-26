@@ -8,3 +8,5 @@ course_helper/
 
 # Python
 __pycache__/
+# 日志
+logs/
