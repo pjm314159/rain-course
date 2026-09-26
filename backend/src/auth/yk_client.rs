@@ -2,6 +2,8 @@
 //!
 //! 请求头/报文对齐 course_helper（.temp/scripts/test_yk_login.py 已实测验证）：
 //! - 登录：POST /api/v3/user/login/app（type: 1=手机+密码, 2=邮箱+密码, 3=验证码）
+//! - 短信：POST /api/v3/user/code/send → /api/v3/user/code/verify
+//! - 扫码：GET /api/v3/user/login/pre-info → POST /api/v3/user/login（30s 长轮询，50001=超时）
 //! - 会话探测：GET /v/course_meta/user_info → data.user_profile.user_id
 //! - 统一信封 {code, msg, data}，code!=0 为上游业务错误
 
@@ -39,6 +41,15 @@ pub fn map_envelope(envelope: Value) -> Result<Value, AppError> {
 pub struct Session {
     pub user_id: i64,
     pub cookie_header: String,
+}
+
+/// 扫码长轮询结果
+#[derive(Debug, PartialEq)]
+pub enum QrPoll {
+    /// 50001：未扫码/未确认，继续轮询
+    Pending,
+    /// 扫码确认成功
+    Success(Session),
 }
 
 pub struct YkClient {
@@ -104,11 +115,83 @@ impl YkClient {
             "ticket": ticket,
             "rand": rand,
         });
+        self.finish_login(body).await
+    }
 
+    /// 短信验证码登录：先 verify 短信码，再 type=3 登录。
+    pub async fn login_sms(
+        &self,
+        phone: &str,
+        code: &str,
+        ticket: &str,
+        rand: &str,
+    ) -> Result<Session, AppError> {
+        let verify_body = json!({"phoneNumber": phone, "email": "", "code": code});
         let resp = self
             .http
-            .post(format!("{}/api/v3/user/login/app", self.base))
-            .json(&body)
+            .post(format!("{}/api/v3/user/code/verify", self.base))
+            .json(&verify_body)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(e.into()))?;
+        let envelope: Value = resp
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(e.into()))?;
+        map_envelope(envelope)?;
+
+        let body = json!({
+            "type": 3,
+            "phoneNumber": phone,
+            "password": "",
+            "email": "",
+            "code": code,
+            "pushDeviceId": "rain-course-web",
+            "ticket": ticket,
+            "rand": rand,
+        });
+        self.finish_login(body).await
+    }
+
+    /// 发送短信验证码（ticket/rand 来自前端腾讯验证码组件）
+    pub async fn sms_send(&self, phone: &str, ticket: &str, rand: &str) -> Result<(), AppError> {
+        let resp = self
+            .http
+            .post(format!("{}/api/v3/user/code/send", self.base))
+            .json(&json!({"phoneNumber": phone, "email": "", "ticket": ticket, "rand": rand}))
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(e.into()))?;
+        let envelope: Value = resp
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(e.into()))?;
+        map_envelope(envelope)?;
+        Ok(())
+    }
+
+    /// 获取扫码登录二维码：返回上游 data（含 qrImage / token）
+    pub async fn qr_preinfo(&self) -> Result<Value, AppError> {
+        let resp = self
+            .http
+            .get(format!("{}/api/v3/user/login/pre-info", self.base))
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(e.into()))?;
+        let envelope: Value = resp
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(e.into()))?;
+        map_envelope(envelope)
+    }
+
+    /// 扫码登录 30s 长轮询。成功时捕获 Set-Cookie 并补全 user_id。
+    pub async fn qr_poll(&self, token_str: &str) -> Result<QrPoll, AppError> {
+        let resp = self
+            .http
+            .post(format!("{}/api/v3/user/login", self.base))
+            .json(&json!({"token": token_str}))
+            .timeout(std::time::Duration::from_secs(35))
             .send()
             .await
             .map_err(|e| AppError::Internal(e.into()))?;
@@ -118,13 +201,20 @@ impl YkClient {
             .json()
             .await
             .map_err(|e| AppError::Internal(e.into()))?;
-        map_envelope(envelope)?;
-
-        let user_id = self.whoami(&cookies).await?;
-        Ok(Session {
-            user_id,
-            cookie_header: cookies,
-        })
+        match map_envelope(envelope) {
+            Ok(_) => {
+                let user_id = self.whoami(&cookies).await?;
+                Ok(QrPoll::Success(Session {
+                    user_id,
+                    cookie_header: cookies,
+                }))
+            }
+            Err(AppError::Upstream {
+                upstream_code: 50001,
+                ..
+            }) => Ok(QrPoll::Pending),
+            Err(e) => Err(e),
+        }
     }
 
     /// 用已有 cookie 探测会话归属；雨课堂会话失效时返回 Unauthorized
@@ -148,9 +238,33 @@ impl YkClient {
                 message: "user_info 响应缺少 user_id".into(),
             })
     }
+
+    /// 登录报文公共尾部：发请求 → 折叠 cookie → 校验信封 → 探测 user_id
+    async fn finish_login(&self, body: Value) -> Result<Session, AppError> {
+        let resp = self
+            .http
+            .post(format!("{}/api/v3/user/login/app", self.base))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(e.into()))?;
+
+        let cookies = collect_cookies(resp.headers());
+        let envelope: Value = resp
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(e.into()))?;
+        map_envelope(envelope)?;
+
+        let user_id = self.whoami(&cookies).await?;
+        Ok(Session {
+            user_id,
+            cookie_header: cookies,
+        })
+    }
 }
 
-/// 把上游 Set-Cookie 头折叠成请求用 Cookie 头（取每个 cookie 的 name=value 段）
+/// 把上游 Set-Cookie 头折叠成请求用 Cookie 头（取每个 cookie 的 name=value 段，同名取最新）
 fn collect_cookies(headers: &reqwest::header::HeaderMap) -> String {
     let mut seen: Vec<String> = Vec::new();
     for v in headers.get_all(reqwest::header::SET_COOKIE) {
@@ -267,6 +381,123 @@ mod tests {
                 assert_eq!(message, "密码错误");
             }
             other => panic!("expected Upstream, got {other:?}"),
+        }
+    }
+
+    // ---- 短信 ----
+
+    #[tokio::test]
+    async fn sms_send_posts_phone_and_ticket() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/user/code/send"))
+            .and(body_partial_json(
+                json!({"phoneNumber": "13800000000", "ticket": "t", "rand": "r"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"code": 0, "msg": "OK"})))
+            .mount(&server)
+            .await;
+
+        let client = YkClient::new(&server.uri());
+        client.sms_send("13800000000", "t", "r").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sms_login_verifies_code_then_logins_with_type_3() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/user/code/verify"))
+            .and(body_partial_json(
+                json!({"phoneNumber": "13800000000", "code": "8848"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"code": 0, "msg": "OK"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/user/login/app"))
+            .and(body_partial_json(
+                json!({"type": 3, "phoneNumber": "13800000000", "code": "8848"}),
+            ))
+            .respond_with(upstream_login_ok())
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v/course_meta/user_info"))
+            .respond_with(upstream_user_info())
+            .mount(&server)
+            .await;
+
+        let client = YkClient::new(&server.uri());
+        let session = client
+            .login_sms("13800000000", "8848", "t", "r")
+            .await
+            .unwrap();
+        assert_eq!(session.user_id, 42);
+        assert_eq!(session.cookie_header, "sessionid=abc123; csrftoken=tok99");
+    }
+
+    // ---- 扫码 ----
+
+    #[tokio::test]
+    async fn qr_preinfo_returns_data_passthrough() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v3/user/login/pre-info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "code": 0, "msg": "OK",
+                "data": {"qrImage": "data:image/png;base64,xx", "token": "tok1", "qrContent": "c"}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = YkClient::new(&server.uri());
+        let data = client.qr_preinfo().await.unwrap();
+        assert_eq!(data["token"], "tok1");
+        assert_eq!(data["qrImage"], "data:image/png;base64,xx");
+    }
+
+    #[tokio::test]
+    async fn qr_poll_timeout_maps_to_pending() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/user/login"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"code": 50001, "msg": "SCAN_QR_CODE_TIMEOUT"})),
+            )
+            .mount(&server)
+            .await;
+
+        let client = YkClient::new(&server.uri());
+        assert_eq!(client.qr_poll("tok1").await.unwrap(), QrPoll::Pending);
+    }
+
+    #[tokio::test]
+    async fn qr_poll_success_returns_session() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/user/login"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"code": 0, "msg": "OK", "data": {"status": 1}}))
+                    .append_header("Set-Cookie", "sessionid=qr77; Path=/"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v/course_meta/user_info"))
+            .and(header("cookie", "sessionid=qr77"))
+            .respond_with(upstream_user_info())
+            .mount(&server)
+            .await;
+
+        let client = YkClient::new(&server.uri());
+        match client.qr_poll("tok1").await.unwrap() {
+            QrPoll::Success(s) => {
+                assert_eq!(s.user_id, 42);
+                assert_eq!(s.cookie_header, "sessionid=qr77");
+            }
+            other => panic!("expected Success, got {other:?}"),
         }
     }
 }

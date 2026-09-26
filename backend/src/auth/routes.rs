@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::token;
-use super::yk_client::YkClient;
+use super::yk_client::{self, YkClient};
 use crate::config::Config;
 use crate::error::AppError;
 
@@ -34,6 +34,10 @@ pub struct AppState {
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/auth/login", post(login))
+        .route("/api/auth/sms/send", post(sms_send))
+        .route("/api/auth/sms/verify", post(sms_verify))
+        .route("/api/auth/qrcode", get(qrcode))
+        .route("/api/auth/qrcode/poll", get(qr_poll))
         .route("/api/auth/me", get(me))
         .route("/api/auth/logout", post(logout))
         .with_state(state)
@@ -83,17 +87,89 @@ async fn login(
         .yk
         .login_password(&body.account, &body.password, &body.ticket, &body.rand)
         .await?;
+    Ok(session_response(&st, session))
+}
+
+#[derive(Deserialize)]
+pub struct SmsSendBody {
+    pub phone: String,
+    pub ticket: String,
+    pub rand: String,
+}
+
+async fn sms_send(
+    State(st): State<Arc<AppState>>,
+    Json(body): Json<SmsSendBody>,
+) -> Result<Response, AppError> {
+    if body.ticket.trim().is_empty() || body.rand.trim().is_empty() {
+        return Err(AppError::CaptchaRejected);
+    }
+    st.yk
+        .sms_send(&body.phone, &body.ticket, &body.rand)
+        .await?;
+    Ok(Json(json!({ "code": 0, "msg": "ok", "data": null })).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct SmsVerifyBody {
+    pub phone: String,
+    pub code: String,
+    pub ticket: String,
+    pub rand: String,
+}
+
+async fn sms_verify(
+    State(st): State<Arc<AppState>>,
+    Json(body): Json<SmsVerifyBody>,
+) -> Result<Response, AppError> {
+    if body.ticket.trim().is_empty() || body.rand.trim().is_empty() {
+        return Err(AppError::CaptchaRejected);
+    }
+    let session = st
+        .yk
+        .login_sms(&body.phone, &body.code, &body.ticket, &body.rand)
+        .await?;
+    Ok(session_response(&st, session))
+}
+
+async fn qrcode(State(st): State<Arc<AppState>>) -> Result<Response, AppError> {
+    let data = st.yk.qr_preinfo().await?;
+    Ok(Json(json!({ "code": 0, "msg": "ok", "data": data })).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct QrPollQuery {
+    pub token: String,
+}
+
+async fn qr_poll(
+    State(st): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<QrPollQuery>,
+) -> Result<Response, AppError> {
+    match st.yk.qr_poll(&q.token).await? {
+        yk_client::QrPoll::Pending => Ok(Json(
+            json!({ "code": 0, "msg": "ok", "data": { "status": "pending" } }),
+        )
+        .into_response()),
+        yk_client::QrPoll::Success(session) => {
+            let resp = session_response(&st, session);
+            Ok(resp)
+        }
+    }
+}
+
+/// 登录成功公共尾部：存会话 → 签发 sid cookie → 返回 user_id
+fn session_response(st: &AppState, session: yk_client::Session) -> Response {
     st.sessions
         .write()
         .expect("session lock poisoned")
         .insert(session.user_id, session.cookie_header.clone());
-
     let sid = token::issue(
         session.user_id,
         now_unix() + SESSION_TTL_SECS,
         &st.config.server_secret,
     );
-    Ok((
+    (
         StatusCode::OK,
         [(header::SET_COOKIE, session_cookie(&sid, SESSION_TTL_SECS))],
         Json(json!({
@@ -101,7 +177,7 @@ async fn login(
             "data": { "user_id": session.user_id }
         })),
     )
-        .into_response())
+        .into_response()
 }
 
 async fn me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Result<Response, AppError> {
@@ -417,6 +493,151 @@ mod tests {
         let v = body_json(resp).await;
         assert_eq!(v["code"], 51004); // 50000 + 1004
         assert!(v["msg"].as_str().unwrap().contains("密码错误"));
+    }
+
+    // ---- 短信 / 扫码路由 ----
+
+    #[tokio::test]
+    async fn sms_send_without_ticket_is_40201() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/sms/send")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({"phone": "13800000000", "ticket": "", "rand": ""}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let v = body_json(resp).await;
+        assert_eq!(v["code"], 40201);
+    }
+
+    #[tokio::test]
+    async fn sms_send_with_ticket_hits_upstream() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/user/code/send"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"code": 0, "msg": "OK"})))
+            .mount(&server)
+            .await;
+
+        let resp = app_with(&server.uri())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/sms/send")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({"phone": "13800000000", "ticket": "t", "rand": "r"}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let v = body_json(resp).await;
+        assert_eq!(v["code"], 0);
+    }
+
+    #[tokio::test]
+    async fn sms_verify_returns_session_cookie() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/user/code/verify"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"code": 0, "msg": "OK"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/user/login/app"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"code": 0, "msg": "OK"}))
+                    .append_header("Set-Cookie", "sessionid=sms55; Path=/"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v/course_meta/user_info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "code": 0, "msg": "OK",
+                "data": { "user_profile": { "user_id": 7 } }
+            })))
+            .mount(&server)
+            .await;
+
+        let resp = app_with(&server.uri())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/sms/verify")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({"phone": "13800000000", "code": "8848", "ticket": "t", "rand": "r"})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let v = body_json(resp).await;
+        assert_eq!(v["code"], 0);
+        assert_eq!(v["data"]["user_id"], 7);
+    }
+
+    #[tokio::test]
+    async fn qrcode_passthrough_preinfo_data() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v3/user/login/pre-info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "code": 0, "msg": "OK",
+                "data": {"qrImage": "data:image/png;base64,x", "token": "tk"}
+            })))
+            .mount(&server)
+            .await;
+
+        let resp = app_with(&server.uri())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/qrcode")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let v = body_json(resp).await;
+        assert_eq!(v["code"], 0);
+        assert_eq!(v["data"]["token"], "tk");
+        assert_eq!(v["data"]["qrImage"], "data:image/png;base64,x");
+    }
+
+    #[tokio::test]
+    async fn qr_poll_pending_returns_pending_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/user/login"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"code": 50001, "msg": "SCAN_QR_CODE_TIMEOUT"})),
+            )
+            .mount(&server)
+            .await;
+
+        let resp = app_with(&server.uri())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/qrcode/poll?token=tk")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let v = body_json(resp).await;
+        assert_eq!(v["code"], 0);
+        assert_eq!(v["data"]["status"], "pending");
     }
 
     // ---- extract_sid ----
