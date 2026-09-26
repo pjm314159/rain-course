@@ -1,3 +1,5 @@
+import { config } from '../config'
+
 /// 统一响应信封解析：{code, msg, data}
 /// - code=0 → {ok:true, data}
 /// - 40101 → {ok:false, needsLogin:true}（触发跳登录）
@@ -44,8 +46,13 @@ export class ApiError extends Error {
   }
 }
 
+export function fullUrl(url: string): string {
+  if (/^https?:\/\//.test(url)) return url
+  return `${config.apiBaseUrl}${url}`
+}
+
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const resp = await fetch(url, {
+  const resp = await fetch(fullUrl(url), {
     method,
     headers: body === undefined ? undefined : JSON_HEADERS,
     body: body === undefined ? undefined : JSON.stringify(body),

@@ -1,6 +1,9 @@
 // 腾讯验证码 Web JS SDK 封装（动态加载，AppId 来自后端 /api/health）
 // 文档：https://cloud.tencent.com/document/product/1110/36841
 
+import { config } from './config'
+import { fullUrl } from './api/client'
+
 interface CaptchaResult {
   ret: number
   ticket: string
@@ -24,19 +27,18 @@ declare global {
 }
 
 const SDK_URL = 'https://turing.captcha.qcloud.com/TJCaptcha.js'
-const FALLBACK_APP_ID = '2091064951' // 雨课堂 AppId（实测不限域名）
 
 let appId: string | null = null
 
-/** 从后端健康检查接口获取 CaptchaAppId（一次） */
+/** 从后端健康检查接口获取 CaptchaAppId（一次；失败用前端配置兜底） */
 export async function loadCaptchaAppId(): Promise<string> {
   if (appId) return appId
   try {
-    const resp = await fetch('/api/health')
+    const resp = await fetch(fullUrl('/api/health'))
     const body = (await resp.json()) as { data?: { captcha_app_id?: string } }
-    appId = body.data?.captcha_app_id ?? FALLBACK_APP_ID
+    appId = body.data?.captcha_app_id ?? config.captchaAppIdFallback
   } catch {
-    appId = FALLBACK_APP_ID
+    appId = config.captchaAppIdFallback
   }
   return appId
 }
@@ -62,7 +64,7 @@ export function showCaptcha(): Promise<{ ticket: string; randstr: string }> {
           reject(new Error('验证码组件不可用'))
           return
         }
-        const captcha = new window.TencentCaptcha(appId ?? FALLBACK_APP_ID, (res) => {
+        const captcha = new window.TencentCaptcha(appId ?? config.captchaAppIdFallback, (res) => {
           if (res.ret === 0 && res.ticket) {
             resolve({ ticket: res.ticket, randstr: res.randstr })
           } else {
