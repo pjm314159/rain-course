@@ -1,0 +1,29 @@
+[package]
+name = "rain-course-backend"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+description = "雨课堂签到助手 Web 版后端 - 扫码签到与房间分享"
+authors = ["pjm314159"]
+license = "GPL-3.0-or-later"
+
+[dependencies]
+
+[dev-dependencies]
+
+# LINTER.md 约定的 clippy 规则：警告视为错误
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+await_holding_lock = "deny"
+
+# 2核2G 服务器部署：最小体积 + 最大运行时优化
+[profile.release]
+opt-level = 3
+lto = "fat"            # 全程序链接时优化
+codegen-units = 1      # 单编译单元，更好优化（牺牲编译时间）
+panic = "abort"        # 不需要 unwind，减小二进制
+strip = true           # 去除符号表与调试信息

@@ -1,0 +1,42 @@
+:root {
+  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  line-height: 1.5;
+  color-scheme: light dark;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100dvh;
+  display: flex;
+  place-items: center;
+  justify-content: center;
+  background: #f5f6f8;
+  color: #1f2329;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #101418;
+    color: #e6e8eb;
+  }
+}
+
+.page {
+  text-align: center;
+  padding: 2rem;
+}
+
+.page h1 {
+  font-size: 1.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.page p {
+  opacity: 0.7;
+}
