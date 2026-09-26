@@ -1,0 +1,11 @@
+backend/target/
+.temp/
+
+course_helper/
+
+.env
+!.env.example
+
+# 实测脚本产物
+scripts/qr.png
+scripts/qr_url.txt
