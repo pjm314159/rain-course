@@ -52,7 +52,6 @@ function HomeWithNav() {
       </header>
       <Routes>
         <Route path="/" element={<Plaza />} />
-        <Route path="/room" element={<Room />} />
       </Routes>
     </div>
   )
@@ -74,6 +73,15 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        {/* 房间页是 ChannelPage 式全屏布局，不套全局导航栏 */}
+        <Route
+          path="/room"
+          element={
+            <RequireAuth>
+              <Room />
+            </RequireAuth>
+          }
+        />
         <Route
           path="*"
           element={

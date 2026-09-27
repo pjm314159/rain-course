@@ -162,12 +162,8 @@ async fn connection(
             ev = async { room_rx.as_mut().expect("precondition").recv().await }, if room_rx.is_some() => {
                 match ev {
                     Ok(m) => {
-                        // qr_update 不回显给发送者（docs/DESIGN.md §4.2）
-                        if let ServerMsg::QrUpdate { by, .. } = &m
-                            && *by == user_id
-                        {
-                            continue;
-                        }
+                        // qr_update 也回显给发送者：签到协作场景下发送者本人
+                        // 同样要在消息流里看到并签到；前端按 raw+expire_at 去重
                         if !send_msg(&mut sink, &mut seq, m).await {
                             break;
                         }
@@ -671,7 +667,7 @@ mod tests {
         let a_member_join = ws_text_of(&mut a, "member_join").await;
         assert_eq!(a_member_join["type"], "member_join");
 
-        // A share_qr → B 收到 qr_update（A 不回显）
+        // A share_qr → B 收到 qr_update；A 自己也收到回显（前端去重）
         ws_send(
             &mut a,
             json!({"type":"share_qr","room":room_id,"raw":"https://www.yuketang.cn/c/xyz"}),
@@ -681,6 +677,9 @@ mod tests {
         assert_eq!(b_qr["type"], "qr_update");
         assert_eq!(b_qr["raw"], "https://www.yuketang.cn/c/xyz");
         assert_eq!(b_qr["by"], 1);
+        let a_echo = ws_text_of(&mut a, "qr_update").await;
+        assert_eq!(a_echo["raw"], "https://www.yuketang.cn/c/xyz");
+        assert_eq!(a_echo["by"], 1);
 
         // B 上报签到回执 → A 收到 sign_result
         ws_send(

@@ -71,7 +71,7 @@ export function applyFrameToState(state: RoomState, frame: ServerFrame): Partial
       return { owner: frame.owner, members: frame.members }
     case 'qr_update':
       if (frame.room !== state.room) return {}
-      // 服务端不回显发送者；本地也不重复追加
+      // 发送者也会收到回显；按 raw+expire_at 去重，避免重复追加
       return {
         messages: state.messages.some((m) => m.raw === frame.raw && m.expire_at === frame.expire_at)
           ? state.messages
