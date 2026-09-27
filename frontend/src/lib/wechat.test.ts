@@ -53,7 +53,7 @@ async function freshModule() {
 
 beforeEach(() => {
   setWx(undefined)
-  for (const s of globalThis.document.head.querySelectorAll('script')) s.remove()
+  for (const s of Array.from(globalThis.document.head.querySelectorAll('script'))) s.remove()
 })
 
 afterEach(() => {
@@ -145,6 +145,12 @@ describe('wechatScanQrCode', () => {
     const { wechatScanQrCode } = await freshModule()
     setWx(fakeWx({ ready: false }))
     await expect(wechatScanQrCode(SIGNATURE)).rejects.toThrow('config:invalid signature')
+  })
+
+  it('fail 回调携带 cancel 时按取消处理（部分微信版本行为）', async () => {
+    const { wechatScanQrCode } = await freshModule()
+    setWx(fakeWx({ fail: { errMsg: 'scanQRCode:cancel' } }))
+    await expect(wechatScanQrCode(SIGNATURE)).resolves.toBeNull()
   })
 
   it('scanQRCode 失败时 reject', async () => {

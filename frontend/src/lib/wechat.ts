@@ -89,10 +89,16 @@ export async function wechatScanQrCode(signature: JssdkSignature): Promise<strin
   return new Promise<string | null>((resolve, reject) => {
     wx.scanQRCode({
       needResult: 1,
-      scanType: ['qrCode', 'barCode'],
+      // 雨课堂签到码为二维码，限定 qrCode 可避免误扫条形码
+      scanType: ['qrCode'],
       success: (res) => resolve(res.resultStr.trim() === '' ? null : res.resultStr),
       cancel: () => resolve(null),
-      fail: (res) => reject(new Error(describeWxError(res))),
+      fail: (res) => {
+        // 部分微信版本用户取消时走 fail（errMsg 形如 "scanQRCode:cancel"）
+        const msg = describeWxError(res)
+        if (msg.includes('cancel')) resolve(null)
+        else reject(new Error(msg))
+      },
     })
   })
 }
