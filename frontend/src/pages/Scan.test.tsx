@@ -10,9 +10,16 @@ vi.mock('../api/client', async (importOriginal) => ({
   api: { get: vi.fn(), post: vi.fn() },
 }))
 
+vi.mock('../lib/qr-scan', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  decodeQrFromImage: vi.fn(),
+}))
+
 import { api } from '../api/client'
+import { decodeQrFromImage } from '../lib/qr-scan'
 
 const mockedPost = vi.mocked(api.post)
+const mockedDecode = vi.mocked(decodeQrFromImage)
 
 const VALID_URL = 'https://www.yuketang.cn/c/abc123'
 
@@ -65,6 +72,37 @@ describe('Scan 手动签到', () => {
     render(<Scan />)
     const btn = screen.getByRole('button', { name: '签到' }) as HTMLButtonElement
     expect(btn.disabled).toBe(true)
+    expect(mockedPost).not.toHaveBeenCalled()
+  })
+})
+
+describe('Scan 上传图片识别', () => {
+  it('识别出二维码后自动提交签到', async () => {
+    mockedDecode.mockResolvedValueOnce(VALID_URL)
+    mockedPost.mockResolvedValueOnce({ status: 'success', lesson_id: 123 })
+    render(<Scan />)
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    await userEvent.upload(input, new File(['fake-png'], 'qr.png', { type: 'image/png' }))
+    await screen.findByText('签到成功')
+    expect(mockedDecode).toHaveBeenCalledOnce()
+    expect(mockedPost).toHaveBeenCalledWith('/api/sign/submit', { url: VALID_URL })
+  })
+
+  it('图片中无二维码时提示识别失败', async () => {
+    mockedDecode.mockRejectedValueOnce(new Error('未能从图片中识别出二维码'))
+    render(<Scan />)
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    await userEvent.upload(input, new File(['x'], 'a.png', { type: 'image/png' }))
+    await screen.findByText('未能从图片中识别出二维码')
+    expect(mockedPost).not.toHaveBeenCalled()
+  })
+
+  it('超限图片直接拒绝且不发起签到', async () => {
+    mockedDecode.mockRejectedValueOnce(new Error('图片超过 5MB，请压缩后重试'))
+    render(<Scan />)
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    await userEvent.upload(input, new File(['x'], 'big.png', { type: 'image/png' }))
+    await screen.findByText('图片超过 5MB，请压缩后重试')
     expect(mockedPost).not.toHaveBeenCalled()
   })
 })
