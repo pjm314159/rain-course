@@ -8,6 +8,7 @@ mod config;
 mod courses;
 mod error;
 mod signin;
+mod wechat;
 mod ws;
 
 use std::sync::Arc;
@@ -45,6 +46,7 @@ fn build_app(cfg: Arc<Config>) -> Router {
     auth::routes::router(state.clone())
         .merge(signin::routes::router(state.clone()))
         .merge(courses::routes::router(state.clone()))
+        .merge(wechat::routes::router(state.clone()))
         .merge(ws::routes::router(state))
         .merge(health)
 }

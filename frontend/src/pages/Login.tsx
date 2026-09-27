@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ApiError, api } from '../api/client'
 import { showCaptcha } from '../captcha'
+import IcpFooter from '../components/IcpFooter'
 import { useAuth } from '../stores/auth'
 
 type Tab = 'password' | 'sms' | 'qrcode'
@@ -222,6 +223,8 @@ export default function Login() {
           <p className="text-sm text-muted">请用微信扫码，二维码过期会自动刷新</p>
         </div>
       )}
+
+      <IcpFooter />
     </main>
   )
 }

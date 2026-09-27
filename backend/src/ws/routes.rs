@@ -422,6 +422,8 @@ mod tests {
             yk_allowed_hosts: vec!["www.yuketang.cn".into()],
             limits,
             log_dir: "logs".into(),
+            wechat_app_id: None,
+            wechat_app_secret: None,
         };
         Arc::new(AppState::new(
             config,

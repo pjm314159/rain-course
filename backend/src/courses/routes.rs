@@ -95,6 +95,8 @@ mod tests {
                 yk_allowed_hosts: vec!["www.yuketang.cn".into()],
                 limits: Default::default(),
                 log_dir: "logs".into(),
+                wechat_app_id: None,
+                wechat_app_secret: None,
             },
             YkClient::new(yk_base),
         ));

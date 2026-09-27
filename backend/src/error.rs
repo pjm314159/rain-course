@@ -43,6 +43,12 @@ pub enum AppError {
     /// 房间入参非法（字段超长等）
     #[error("{0}")]
     BadRoomInput(&'static str),
+    /// 请求参数非法（缺字段等）
+    #[error("{0}")]
+    BadInput(&'static str),
+    /// 微信 JS-SDK 未配置（缺少 WECHAT_APP_ID / WECHAT_APP_SECRET）
+    #[error("微信扫码未配置，请联系管理员")]
+    WechatNotConfigured,
     /// 其他内部错误
     #[error("内部错误")]
     Internal(#[from] anyhow::Error),
@@ -62,6 +68,8 @@ impl AppError {
             AppError::RoomNotFound => error_code::ROOM_NOT_FOUND,
             AppError::NotRoomOwner => error_code::NOT_ROOM_OWNER,
             AppError::BadRoomInput(_) => error_code::BAD_REQUEST,
+            AppError::BadInput(_) => error_code::BAD_REQUEST,
+            AppError::WechatNotConfigured => 40307,
             AppError::Internal(_) => 50000,
         }
     }
