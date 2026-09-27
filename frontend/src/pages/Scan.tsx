@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../api/client'
 import { submitSign } from '../api/sign'
-import { startQrScan, type ScannerHandle } from '../lib/qr-scan'
+import { decodeQrFromImage, startQrScan, type ScannerHandle } from '../lib/qr-scan'
 import { useAuth } from '../stores/auth'
 
 type Outcome = { kind: 'success'; text: string } | { kind: 'error'; text: string } | null
@@ -14,6 +14,8 @@ export default function Scan() {
   const [outcome, setOutcome] = useState<Outcome>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const handleRef = useRef<ScannerHandle | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [decoding, setDecoding] = useState(false)
 
   // 卸载时确保相机与解码器停止
   useEffect(() => () => handleRef.current?.stop(), [])
@@ -73,6 +75,22 @@ export default function Scan() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanning])
 
+  /** 上传图片本地识别二维码 → 识别即签到（图片不上传服务器） */
+  async function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // 允许重复选择同一文件
+    if (!file || busy || decoding) return
+    setDecoding(true)
+    setOutcome(null)
+    try {
+      await handleUrl(await decodeQrFromImage(file))
+    } catch (err) {
+      setOutcome({ kind: 'error', text: err instanceof Error ? err.message : '图片识别失败' })
+    } finally {
+      setDecoding(false)
+    }
+  }
+
   function stopCamera() {
     handleRef.current?.stop()
     handleRef.current = null
@@ -98,6 +116,26 @@ export default function Scan() {
           打开相机扫码
         </button>
       )}
+
+      <div className="divider">或上传图片识别</div>
+
+      <div className="upload-row">
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={busy || decoding}
+        >
+          {decoding ? '识别中…' : '上传二维码图片'}
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          hidden
+          aria-label="选择二维码图片"
+          onChange={(e) => void handleImageUpload(e)}
+        />
+      </div>
 
       <div className="divider">或手动输入</div>
 

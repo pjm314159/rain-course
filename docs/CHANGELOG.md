@@ -15,6 +15,7 @@
 - Git 主分支使用 `main`，集成分支使用 `dev`；远程仓库 `github.com/pjm314159/rain-course`（origin）
 - 前端包管理器使用 pnpm（CI 同步使用 `pnpm install --frozen-lockfile`）
 - 前端脚手架（Vite + React 19 + TS + React Compiler + oxlint），已清除模板代码并填入项目信息（name/author/描述），新增 `typecheck`/`test` 脚本
+- 扫码页支持上传二维码图片识别签到：浏览器本地解码（`BarcodeDetector` 优先、`@zxing/browser` 降级），图片不上传服务器；单图 ≤ 5MB，识别失败明确提示
 - 后端 `Cargo.toml`：填入项目信息（`rain-course-backend` 0.1.0 / author / 描述），配置 `[lints]`（forbid unsafe、deny unwrap_used 等）与 release 最优 profile（lto=fat、codegen-units=1、panic=abort、strip）；后端暂不引入框架依赖
 - 许可证：全项目使用 GPL-3.0-or-later（LICENSE 为官方全文），`rust-version` 对齐本机 rustc 1.98；创建根 README.md
 

@@ -2,7 +2,8 @@
 export type ScanEngine = 'native' | 'zxing'
 
 interface NativeDetector {
-  detect: (source: HTMLVideoElement) => Promise<Array<{ rawValue: string }>>
+  // 运行时接受任意 ImageBitmapSource（img/video/canvas），DOM lib 类型过窄故自行声明
+  detect: (source: ImageBitmapSource) => Promise<Array<{ rawValue: string }>>
 }
 
 declare global {
@@ -17,6 +18,43 @@ export function scanEngine(): ScanEngine {
 
 export interface ScannerHandle {
   stop: () => void
+}
+
+/** 上传图片的大小上限（5MB，超出直接拒绝） */
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+/** 从上传的图片中本地识别第一个二维码；识别不出/超限抛错（图片不离开浏览器） */
+export async function decodeQrFromImage(file: File): Promise<string> {
+  if (file.size > MAX_IMAGE_BYTES) throw new Error('图片超过 5MB，请压缩后重试')
+  const objectUrl = URL.createObjectURL(file)
+  try {
+    const text =
+      scanEngine() === 'native' ? await decodeNative(objectUrl) : await decodeZxing(objectUrl)
+    if (!text) throw new Error('未能从图片中识别出二维码')
+    return text
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
+async function decodeNative(objectUrl: string): Promise<string> {
+  const img = new Image()
+  img.src = objectUrl
+  await img.decode()
+  const detector = new window.BarcodeDetector!({ formats: ['qr_code'] })
+  const codes = await detector.detect(img)
+  return codes.find((c) => c.rawValue)?.rawValue ?? ''
+}
+
+async function decodeZxing(objectUrl: string): Promise<string> {
+  const { BrowserMultiFormatReader } = await import('@zxing/browser')
+  const reader = new BrowserMultiFormatReader()
+  try {
+    const result = await reader.decodeFromImageUrl(objectUrl)
+    return result.getText()
+  } catch {
+    return ''
+  }
 }
 
 /** 打开相机并持续识别二维码，检到第一个结果后回调并自动停止 */

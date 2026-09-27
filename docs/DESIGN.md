@@ -18,7 +18,7 @@
 | 会话 | 签名 cookie（`axum-extra` `PrivateCookieJar`，HMAC 防篡改，14 天滑动续期；校验只验签名，无服务端状态） |
 | 错误 | `thiserror` + `anyhow` |
 | 前端 | Vite `react-ts` + `react-router` + `zustand` + TailwindCSS；包管理器 **pnpm** |
-| 扫码 | `BarcodeDetector` 特性检测 → 降级 `@zxing/browser`；微信内走 JS-SDK |
+| 扫码 | `BarcodeDetector` 特性检测 → 降级 `@zxing/browser`（相机实时扫码 + 图片上传识别，均在浏览器本地解码）；微信内走 JS-SDK |
 | WS 客户端 | 原生 WebSocket 封装（心跳、指数退避重连、房间状态机） |
 | 部署 | Docker Compose：`nginx:stable-alpine`（TLS + 静态 + 反代）+ axum 多阶段构建镜像 |
 | 存储 | **无数据库、无 Redis**。站点登录态 = 签名 cookie（无服务端存储）；雨课堂凭证、房间、二维码内容、WS 状态全内存，服务重启需重新登录（已接受的取舍） |
@@ -169,6 +169,7 @@ raw 内容
 - **任何未通过校验的内容：直接返回业务错误，绝不发起任何出站请求**（SSRF 与钓鱼转发防线）；
 - 请求头按旧项目携带 `xtbz: ykt`、`x-client: app` 等；cookie 会话附 `x-csrftoken` / `x-uid` / `sessionid`（见 `api_service.dart`、`session/cookie.dart`）；
 - 前端仅负责采集与展示，不自行请求二维码内的 URL。
+- 图片上传识别：上传的二维码截图由前端本地解码（`BarcodeDetector` 优先、`@zxing/browser` 降级），图片不离开浏览器、不上传服务器（单图 ≤ 5MB）；识别出的 URL 仍走本节统一校验与签到流程。
 
 ---
 
