@@ -40,6 +40,7 @@ export type ServerMsg =
   | {
       type: 'joined'
       room: number
+      name?: string
       owner: number
       members: number[]
       messages: QrMsg[]

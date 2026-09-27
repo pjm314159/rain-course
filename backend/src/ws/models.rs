@@ -101,9 +101,10 @@ pub struct QrMsgOut {
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMsg {
-    /// 加入成功：全量成员 + 未过期历史消息 + 房间关联信息
+    /// 加入成功：房间名 + 全量成员 + 未过期历史消息 + 房间关联信息
     Joined {
         room: RoomId,
+        name: Option<String>,
         owner: UserId,
         members: Vec<UserId>,
         messages: Vec<QrMsgOut>,

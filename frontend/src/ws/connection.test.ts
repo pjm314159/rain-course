@@ -12,6 +12,7 @@ import {
 } from './connection'
 
 class FakeSocket implements WsSocketLike {
+  open = false
   sent: string[] = []
   closedWith: { code?: number; reason?: string } | null = null
   onopen: (() => void) | null = null
@@ -20,6 +21,8 @@ class FakeSocket implements WsSocketLike {
   onerror: (() => void) | null = null
 
   send(data: string): void {
+    // 对齐浏览器行为：open 前 send 抛 InvalidStateError
+    if (!this.open) throw new Error('WebSocket is not open yet')
     this.sent.push(data)
   }
 
@@ -59,6 +62,13 @@ function makeHarness(maxBackoffMs?: number) {
     sockets,
     timers,
     statuses,
+    /** 将第 i 个 socket 置为 open 并触发 onopen */
+    openSocket(i: number) {
+      const s = sockets[i]
+      if (!s) throw new Error(`no socket ${i}`)
+      s.open = true
+      s.onopen?.()
+    },
     fireNextTimer() {
       const t = timers.find((x) => !x.cancelled)
       if (!t) throw new Error('no pending timer')
@@ -76,7 +86,7 @@ type Harness = ReturnType<typeof makeHarness>
 /** start + onopen，进入 lobby */
 function connectLobby(h: Harness): void {
   h.conn.start()
-  h.sockets[0]!.onopen!()
+  h.openSocket(0)
 }
 
 /** 加入房间并收到 joined（进入 in_room） */
@@ -92,7 +102,7 @@ describe('WsConnection', () => {
     const h = makeHarness()
     h.conn.start()
     expect(h.conn.getStatus()).toBe('connecting')
-    h.sockets[0]!.onopen!()
+    h.openSocket(0)
     expect(h.conn.getStatus()).toBe('lobby')
     expect(h.statuses).toEqual(['connecting', 'lobby'])
   })
@@ -134,7 +144,7 @@ describe('WsConnection', () => {
 
     h.fireNextTimer()
     expect(h.sockets).toHaveLength(2)
-    h.sockets[1]!.onopen!()
+    h.openSocket(1)
     // 恢复中：重发 join，等 joined 确认
     expect(sentTypes(h.sockets[1]!)).toEqual(['join'])
     expect(JSON.parse(h.sockets[1]!.sent[0]!)).toEqual({ type: 'join', room: 7 })
@@ -189,7 +199,7 @@ describe('WsConnection', () => {
 
     h.sockets[0]!.onclose!({ code: 1006 })
     h.fireNextTimer()
-    h.sockets[1]!.onopen!()
+    h.openSocket(1)
     expect(h.conn.getStatus()).toBe('lobby')
     expect(h.sockets[1]!.sent).toHaveLength(0)
   })
@@ -203,9 +213,27 @@ describe('WsConnection', () => {
 
     h.sockets[0]!.onclose!({ code: 1006 })
     h.fireNextTimer()
-    h.sockets[1]!.onopen!()
+    h.openSocket(1)
     expect(h.conn.getStatus()).toBe('lobby')
     expect(h.sockets[1]!.sent).toHaveLength(0)
+  })
+
+  it('connecting 期间发送的消息在 open 后补发', () => {
+    const h = makeHarness()
+    h.conn.start()
+    h.conn.send({ type: 'share_qr', room: 3, raw: 'r' })
+    expect(h.sockets[0]!.sent).toHaveLength(0) // 尚未 open，已排队
+    h.openSocket(0)
+    expect(sentTypes(h.sockets[0]!)).toEqual(['share_qr'])
+  })
+
+  it('连接建立前 join：open 后仅自动 rejoin 一次，不重复发送', () => {
+    const h = makeHarness()
+    h.conn.start()
+    h.conn.send({ type: 'join', room: 7 })
+    h.openSocket(0)
+    expect(sentTypes(h.sockets[0]!)).toEqual(['join'])
+    expect(JSON.parse(h.sockets[0]!.sent[0]!)).toMatchObject({ type: 'join', room: 7 })
   })
 
   it('stop() → close(1000)、状态 closed，之后发送被忽略', () => {

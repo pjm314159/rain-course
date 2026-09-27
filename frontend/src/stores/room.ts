@@ -16,6 +16,8 @@ export interface RoomState {
   status: WsStatus
   /** 当前所在房间；null = 未加入 */
   room: number | null
+  /** 房间名（joined 帧下发） */
+  name: string | null
   owner: number | null
   members: number[]
   /** 历史二维码消息（含已过期，展示层过滤） */
@@ -37,7 +39,15 @@ export interface RoomState {
 }
 
 function withoutRoom(): Partial<RoomState> {
-  return { room: null, owner: null, members: [], messages: [], meta: null, needPassword: false }
+  return {
+    room: null,
+    name: null,
+    owner: null,
+    members: [],
+    messages: [],
+    meta: null,
+    needPassword: false,
+  }
 }
 
 export function applyFrameToState(state: RoomState, frame: ServerFrame): Partial<RoomState> {
@@ -45,6 +55,7 @@ export function applyFrameToState(state: RoomState, frame: ServerFrame): Partial
     case 'joined':
       return {
         room: frame.room,
+        name: frame.name ?? null,
         owner: frame.owner,
         members: frame.members,
         messages: frame.messages,
@@ -85,6 +96,7 @@ export function applyFrameToState(state: RoomState, frame: ServerFrame): Partial
 export const useRoom = create<RoomState>((set) => ({
   status: 'idle',
   room: null,
+  name: null,
   owner: null,
   members: [],
   messages: [],

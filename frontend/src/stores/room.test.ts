@@ -11,6 +11,7 @@ function baseState(): RoomState {
   return {
     status: 'lobby',
     room: 7,
+    name: '测试房',
     owner: 1,
     members: [1],
     messages: [],
@@ -32,6 +33,7 @@ describe('applyFrameToState', () => {
     const out = applyFrameToState(st, fr({
       type: 'joined',
       room: 7,
+      name: '周一高数课',
       owner: 1,
       members: [1, 2],
       messages: [{ raw: 'r', by: 2, expire_at: 5 }],
@@ -39,6 +41,7 @@ describe('applyFrameToState', () => {
     }))
     expect(out).toEqual({
       room: 7,
+      name: '周一高数课',
       owner: 1,
       members: [1, 2],
       messages: [{ raw: 'r', by: 2, expire_at: 5 }],
@@ -88,6 +91,7 @@ describe('applyFrameToState', () => {
     const st: RoomState = { ...baseState(), messages: [{ raw: 'r', by: 1, expire_at: 1 }] }
     const cleared = applyFrameToState(st, fr({ type: 'error', code: 40404, msg: '房间已关闭' }))
     expect(cleared.room).toBeNull()
+    expect(cleared.name).toBeNull()
     expect(cleared.messages).toEqual([])
     expect(cleared.needPassword).toBe(false)
 

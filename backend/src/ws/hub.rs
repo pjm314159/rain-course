@@ -684,6 +684,7 @@ impl Hub {
     fn build_joined(room: &Room, now: Now) -> ServerMsg {
         ServerMsg::Joined {
             room: room.id,
+            name: room.name.clone(),
             owner: room.owner,
             members: member_list(room),
             messages: room

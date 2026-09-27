@@ -13,6 +13,15 @@ import { useRoom } from '../stores/room'
 import { getWs } from '../ws/client'
 import type { RoomMeta } from '../ws/protocol'
 
+// 视觉样式常量（参照 qrcode_share 的 Card/Input/Button 设计令牌）
+const cardCls = 'rounded-lg border border-hairline bg-canvas p-4'
+const cardCreamCls = 'rounded-lg bg-surface-card p-6'
+const labelCls = 'block text-sm font-medium text-ink'
+const inputCls =
+  'mt-1 w-full rounded-md border border-hairline bg-canvas px-4 py-3 text-sm text-ink transition-colors duration-150 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/20'
+const btnPrimaryCls =
+  'inline-flex w-full items-center justify-center rounded-md bg-ink px-5 py-3 text-sm font-semibold text-on-primary transition-colors duration-150 hover:bg-ink-active focus:outline-none focus:ring-2 focus:ring-ink/30 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
+
 function formatCountdown(remainMs: number): string {
   const total = Math.max(0, Math.ceil(remainMs / 1000))
   const m = Math.floor(total / 60)
@@ -45,20 +54,37 @@ function QrCard({ raw, by, expireAt }: { raw: string; by: number; expireAt: numb
   }
 
   return (
-    <li className="qr-card">
-      <code className="qr-raw">{raw}</code>
-      <div className="qr-ops">
-        <span className="muted">
+    <li className="animate-fade-in rounded-lg border border-hairline bg-canvas p-4">
+      <code className="block truncate rounded bg-surface-soft px-2 py-1 font-mono text-xs text-body">
+        {raw}
+      </code>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-muted">
           来自成员 {by} · 剩余 {formatCountdown(remain)}
         </span>
-        <button type="button" onClick={() => void navigator.clipboard.writeText(raw)}>
-          复制
-        </button>
-        <button type="button" onClick={() => void sign()} disabled={signing}>
-          {signing ? '签到中…' : '去签到'}
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => void navigator.clipboard.writeText(raw)}
+            className="rounded-md px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-surface-soft hover:text-ink"
+          >
+            复制
+          </button>
+          <button
+            type="button"
+            onClick={() => void sign()}
+            disabled={signing}
+            className="rounded-md bg-ink px-3 py-1.5 text-xs font-semibold text-on-primary transition-colors hover:bg-ink-active disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {signing ? '签到中…' : '去签到'}
+          </button>
+        </div>
       </div>
-      {result && <p className={result === '签到成功' ? 'success' : 'error'}>{result}</p>}
+      {result && (
+        <p className={result === '签到成功' ? 'mt-2 text-xs text-success' : 'mt-2 text-xs text-error'}>
+          {result}
+        </p>
+      )}
     </li>
   )
 }
@@ -77,17 +103,23 @@ function CreateForm() {
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     if (busy) return
+    const trimmed = name.trim()
+    if (!trimmed) {
+      setErr('请填写房间名')
+      return
+    }
     setBusy(true)
     setErr(null)
     try {
       const { room_id } = await createRoom({
-        name: name.trim() || undefined,
+        name: trimmed,
         password: password.trim() || undefined,
         qr_ttl_secs: Math.min(3600, Math.max(1, Math.floor(ttlMins * 60))),
         permanent,
         lifetime_mins: permanent ? undefined : Math.max(1, lifetimeMins),
         meta: Object.values(meta).some((v) => v?.trim()) ? meta : undefined,
       })
+      // 创建成功即自动进入房间；WS 未 open 时由连接层排队补发
       getWs().send({ type: 'join', room: room_id, password: password.trim() || undefined })
     } catch (e2) {
       setErr(e2 instanceof ApiError ? e2.message : '创建失败，请重试')
@@ -97,9 +129,10 @@ function CreateForm() {
   }
 
   const metaField = (key: keyof RoomMeta, label: string) => (
-    <label>
+    <label className={labelCls}>
       {label}
       <input
+        className={inputCls}
         value={meta[key] ?? ''}
         onChange={(e) => setMeta({ ...meta, [key]: e.target.value })}
       />
@@ -107,24 +140,33 @@ function CreateForm() {
   )
 
   return (
-    <form className="panel" onSubmit={(e) => void submit(e)}>
-      <h2>创建房间</h2>
-      <label>
-        房间名（可选）
-        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={32} />
+    <form className={cardCreamCls + ' space-y-4'} onSubmit={(e) => void submit(e)}>
+      <h2 className="text-lg font-semibold text-ink">创建房间</h2>
+      <label className={labelCls}>
+        房间名<span className="text-brand-pink"> *</span>
+        <input
+          className={inputCls}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={32}
+          required
+          placeholder="例如：周一高数课"
+        />
       </label>
-      <label>
+      <label className={labelCls}>
         房间密码（可选）
         <input
+          className={inputCls}
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           maxLength={64}
         />
       </label>
-      <label>
+      <label className={labelCls}>
         消息有效期（分钟，≤60）
         <input
+          className={inputCls}
           type="number"
           min={1}
           max={60}
@@ -132,14 +174,20 @@ function CreateForm() {
           onChange={(e) => setTtlMins(Number(e.target.value) || 60)}
         />
       </label>
-      <label className="check">
-        <input type="checkbox" checked={permanent} onChange={(e) => setPermanent(e.target.checked)} />
+      <label className="flex items-center gap-2 text-sm text-ink">
+        <input
+          className="h-4 w-4 accent-ink"
+          type="checkbox"
+          checked={permanent}
+          onChange={(e) => setPermanent(e.target.checked)}
+        />
         永久房间（14 天无消息仍会被回收）
       </label>
       {!permanent && (
-        <label>
+        <label className={labelCls}>
           生命周期（分钟，默认 240 = 4 小时）
           <input
+            className={inputCls}
             type="number"
             min={1}
             value={lifetimeMins}
@@ -147,11 +195,15 @@ function CreateForm() {
           />
         </label>
       )}
-      <button type="button" className="link" onClick={() => setAdvanced(!advanced)}>
+      <button
+        type="button"
+        className="flex items-center gap-1 text-sm text-muted transition-colors hover:text-ink"
+        onClick={() => setAdvanced(!advanced)}
+      >
         {advanced ? '收起课程信息' : '填写课程信息（可选）'}
       </button>
       {advanced && (
-        <div className="grid">
+        <div className="grid grid-cols-2 gap-3 animate-slide-down">
           {metaField('course_name', '课程名称')}
           {metaField('location', '上课地点')}
           {metaField('teacher', '教师')}
@@ -159,8 +211,8 @@ function CreateForm() {
           {metaField('class_name', '班级')}
         </div>
       )}
-      {err && <p className="error">{err}</p>}
-      <button type="submit" disabled={busy}>
+      {err && <p className="text-sm text-error">{err}</p>}
+      <button type="submit" className={btnPrimaryCls} disabled={busy}>
         {busy ? '创建中…' : '创建房间'}
       </button>
     </form>
@@ -181,11 +233,12 @@ function JoinForm() {
   }
 
   return (
-    <form className="panel" onSubmit={submit}>
-      <h2>加入房间</h2>
-      <label>
+    <form className={cardCreamCls + ' space-y-4'} onSubmit={submit}>
+      <h2 className="text-lg font-semibold text-ink">加入房间</h2>
+      <label className={labelCls}>
         房间号
         <input
+          className={inputCls}
           inputMode="numeric"
           value={room}
           onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))}
@@ -193,9 +246,10 @@ function JoinForm() {
         />
       </label>
       {(needPassword || password) && (
-        <label>
+        <label className={labelCls}>
           房间密码
           <input
+            className={inputCls}
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -203,8 +257,8 @@ function JoinForm() {
           />
         </label>
       )}
-      {lastError && <p className="error">{lastError.msg}</p>}
-      <button type="submit" disabled={!roomId}>
+      {lastError && <p className="text-sm text-error">{lastError.msg}</p>}
+      <button type="submit" className={btnPrimaryCls} disabled={!roomId}>
         加入房间
       </button>
     </form>
@@ -212,7 +266,7 @@ function JoinForm() {
 }
 
 function InRoomView() {
-  const { room, owner, members, messages, meta, signFeed } = useRoom()
+  const { room, name, owner, members, messages, meta, signFeed } = useRoom()
   const userId = useAuth((s) => s.userId)
   const clearRoom = useRoom((s) => s.clearRoom)
   const [raw, setRaw] = useState('')
@@ -261,59 +315,120 @@ function InRoomView() {
   }
 
   return (
-    <div className="room-view">
-      <div className="panel room-head">
-        <div>
-          <h2>房间 {room}</h2>
-          {meta && (
-            <p className="muted">
-              {[meta.course_name, meta.teacher, meta.location, meta.time, meta.class_name]
-                .filter(Boolean)
-                .join(' · ')}
+    <div className="mt-6 space-y-6">
+      {/* 房间头部：深色品牌卡，房间号放大便于口头转述 */}
+      <div className="relative overflow-hidden rounded-xl bg-brand-teal p-6 text-on-dark md:p-8">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -top-16 -right-16 h-48 w-48 rounded-full bg-brand-pink opacity-20 blur-3xl"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-20 -left-10 h-56 w-56 rounded-full bg-brand-mint opacity-10 blur-3xl"
+        />
+        <div className="relative z-10 flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold md:text-2xl">{name ?? '未命名房间'}</h2>
+            <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="text-sm text-on-dark-soft">房间号</span>
+              <strong className="room-id text-4xl font-bold tabular-nums tracking-[0.2em] text-brand-ochre md:text-5xl">
+                {room}
+              </strong>
+              <button
+                type="button"
+                className="rounded-md px-2.5 py-1.5 text-xs font-medium text-on-dark-soft transition-colors hover:bg-white/10 hover:text-on-dark"
+                onClick={() => void navigator.clipboard.writeText(String(room))}
+              >
+                复制
+              </button>
+            </div>
+            <p className="mt-3 text-sm text-on-dark-soft">
+              告诉同学房间号即可加入；公开房间也会出现在广场
             </p>
-          )}
-        </div>
-        <div className="room-ops">
-          {owner === userId && (
-            <button type="button" className="danger" onClick={() => void handleClose()}>
-              关闭房间
+            {meta && (
+              <p className="mt-1 text-sm text-on-dark-soft">
+                {[meta.course_name, meta.teacher, meta.location, meta.time, meta.class_name]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+            )}
+          </div>
+          <div className="flex shrink-0 gap-2">
+            {owner === userId && (
+              <button
+                type="button"
+                className="rounded-md bg-error px-4 py-2 text-sm font-semibold text-on-primary transition-colors hover:bg-error/90"
+                onClick={() => void handleClose()}
+              >
+                关闭房间
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={leave}
+              className="rounded-md border border-white/20 px-4 py-2 text-sm font-medium transition-colors hover:bg-white/10"
+            >
+              离开房间
             </button>
-          )}
-          <button type="button" onClick={leave}>
-            离开房间
-          </button>
+          </div>
         </div>
       </div>
-      {closeErr && <p className="error">{closeErr}</p>}
+      {closeErr && <p className="text-sm text-error">{closeErr}</p>}
 
-      <div className="panel">
-        <h3>成员（{members.length}）</h3>
-        <ul className="members">
+      <div className={cardCls}>
+        <h3 className="text-lg font-semibold text-ink">成员（{members.length}）</h3>
+        <ul className="mt-3 flex flex-wrap gap-2">
           {members.map((m) => (
-            <li key={m}>
+            <li
+              key={m}
+              className="inline-flex items-center gap-1.5 rounded-full bg-surface-card px-3 py-1 text-sm text-ink"
+            >
               成员 {m}
-              {m === owner && <span className="tag">房主</span>}
-              {m === userId && <span className="tag">我</span>}
+              {m === owner && (
+                <span className="rounded-full bg-brand-ochre/20 px-2 py-0.5 text-xs font-medium text-brand-ochre">
+                  房主
+                </span>
+              )}
+              {m === userId && (
+                <span className="rounded-full bg-brand-mint/30 px-2 py-0.5 text-xs font-medium text-brand-teal">
+                  我
+                </span>
+              )}
             </li>
           ))}
         </ul>
       </div>
 
-      <div className="panel">
-        <h3>分享签到码</h3>
+      <div className={cardCls}>
+        <h3 className="text-lg font-semibold text-ink">分享签到码</h3>
         {scanning ? (
-          <div className="camera">
-            <video ref={videoRef} muted playsInline aria-label="相机取景" />
-            <button type="button" onClick={() => setScanning(false)}>
+          <div className="mt-3 overflow-hidden rounded-xl border border-hairline">
+            <video
+              ref={videoRef}
+              muted
+              playsInline
+              aria-label="相机取景"
+              className="aspect-[4/3] w-full bg-black object-cover"
+            />
+            <button
+              type="button"
+              onClick={() => setScanning(false)}
+              className="w-full bg-canvas py-2.5 text-sm font-medium text-ink transition-colors hover:bg-surface-soft"
+            >
               停止扫码
             </button>
           </div>
         ) : (
-          <button type="button" onClick={() => setScanning(true)}>
+          <button
+            type="button"
+            onClick={() => setScanning(true)}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-brand-pink/40 bg-brand-pink/5 px-4 py-3 text-sm font-medium text-brand-pink transition-all hover:border-brand-pink/60 hover:bg-brand-pink/10 active:scale-[0.98]"
+          >
             打开相机扫码分享
           </button>
         )}
         <form
+          className="mt-4 space-y-3"
           onSubmit={(e) => {
             e.preventDefault()
             const v = raw.trim()
@@ -327,17 +442,18 @@ function InRoomView() {
             placeholder="或粘贴签到码内容"
             value={raw}
             onChange={(e) => setRaw(e.target.value)}
+            className={inputCls}
           />
-          <button type="submit" disabled={!raw.trim()}>
+          <button type="submit" className={btnPrimaryCls} disabled={!raw.trim()}>
             推送给全房间
           </button>
         </form>
       </div>
 
-      <div className="panel">
-        <h3>签到码（{messages.length}）</h3>
-        {messages.length === 0 && <p className="muted">暂无，等待成员分享</p>}
-        <ul className="qr-list">
+      <div className={cardCls}>
+        <h3 className="text-lg font-semibold text-ink">签到码（{messages.length}）</h3>
+        {messages.length === 0 && <p className="mt-2 text-sm text-muted">暂无，等待成员分享</p>}
+        <ul className="mt-3 space-y-3">
           {messages.map((m) => (
             <QrCard key={`${m.raw}-${m.expire_at}`} raw={m.raw} by={m.by} expireAt={m.expire_at} />
           ))}
@@ -345,11 +461,18 @@ function InRoomView() {
       </div>
 
       {signFeed.length > 0 && (
-        <div className="panel">
-          <h3>签到回执</h3>
-          <ul className="sign-feed">
+        <div className={cardCls}>
+          <h3 className="text-lg font-semibold text-ink">签到回执</h3>
+          <ul className="mt-3 space-y-2">
             {signFeed.map((f, i) => (
-              <li key={i} className={f.ok ? 'success' : 'error'}>
+              <li
+                key={i}
+                className={
+                  f.ok
+                    ? 'rounded-md bg-success/10 px-3 py-2 text-sm text-success'
+                    : 'rounded-md bg-error/10 px-3 py-2 text-sm text-error'
+                }
+              >
                 成员 {f.by} {f.ok ? '签到成功' : `签到失败：${f.reason ?? '未知原因'}`}
               </li>
             ))}
@@ -369,19 +492,21 @@ export default function Room() {
   }, [])
 
   return (
-    <main className="page room">
-      <h1>分享房间</h1>
-      <p>
+    <main className="mx-auto max-w-5xl px-4 py-8">
+      <h1 className="text-2xl font-bold text-ink">分享房间</h1>
+      <p className="mt-1 text-sm text-muted">
         状态：{status}
         {room === null && (
           <>
             {' · '}
-            <Link to="/plaza">去广场看看</Link>
+            <Link to="/plaza" className="font-medium text-brand-pink hover:underline">
+              去广场看看
+            </Link>
           </>
         )}
       </p>
       {room === null ? (
-        <div className="two-col">
+        <div className="mt-6 grid gap-6 md:grid-cols-2">
           <CreateForm />
           <JoinForm />
         </div>

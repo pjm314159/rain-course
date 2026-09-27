@@ -6,6 +6,17 @@ import { useAuth } from '../stores/auth'
 
 type Outcome = { kind: 'success'; text: string } | { kind: 'error'; text: string } | null
 
+// 视觉样式常量（参照 qrcode_share 的 Input/Button 设计令牌）
+const inputCls =
+  'w-full rounded-md border border-hairline bg-canvas px-4 py-3 text-sm text-ink transition-colors duration-150 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/20'
+const btnPrimaryCls =
+  'inline-flex w-full items-center justify-center rounded-md bg-ink px-5 py-3 text-sm font-semibold text-on-primary transition-colors duration-150 hover:bg-ink-active focus:outline-none focus:ring-2 focus:ring-ink/30 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
+const btnSecondaryCls =
+  'rounded-md border border-hairline bg-canvas px-5 py-3 text-sm font-medium text-ink transition-colors duration-150 hover:bg-surface-soft active:bg-surface-card focus:outline-none focus:ring-2 focus:ring-ink/30 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
+// 参照 ChannelPage 的 Scan & Share 虚线品牌按钮
+const btnScanCls =
+  'flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-brand-pink/40 bg-brand-pink/5 px-4 py-3 text-sm font-medium text-brand-pink transition-all hover:border-brand-pink/60 hover:bg-brand-pink/10 active:scale-[0.98]'
+
 export default function Scan() {
   const clear = useAuth((s) => s.clear)
   const [scanning, setScanning] = useState(false)
@@ -98,33 +109,47 @@ export default function Scan() {
   }
 
   return (
-    <main className="page scan">
-      <h1>扫码签到</h1>
-      <p>扫描课堂动态二维码，或手动粘贴签到链接</p>
+    <main className="mx-auto max-w-md px-4 py-8">
+      <h1 className="text-2xl font-bold text-ink">扫码签到</h1>
+      <p className="mt-1 text-sm text-muted">扫描课堂动态二维码，或手动粘贴签到链接</p>
 
-      {outcome && <p className={outcome.kind === 'success' ? 'success' : 'error'}>{outcome.text}</p>}
+      {outcome && (
+        <p
+          className={`mt-4 rounded-md p-3 text-sm ${
+            outcome.kind === 'success' ? 'bg-success/10 text-success' : 'bg-error/10 text-error'
+          }`}
+        >
+          {outcome.text}
+        </p>
+      )}
 
       {scanning ? (
-        <div className="camera">
-          <video ref={videoRef} muted playsInline aria-label="相机取景" />
-          <button type="button" onClick={stopCamera}>
+        <div className="mt-6 overflow-hidden rounded-xl border border-hairline">
+          <video
+            ref={videoRef}
+            muted
+            playsInline
+            aria-label="相机取景"
+            className="aspect-[4/3] w-full bg-black object-cover"
+          />
+          <button
+            type="button"
+            onClick={stopCamera}
+            className="w-full bg-canvas py-2.5 text-sm font-medium text-ink transition-colors hover:bg-surface-soft"
+          >
             停止扫码
           </button>
         </div>
       ) : (
-        <button type="button" onClick={() => setScanning(true)}>
+        <button type="button" onClick={() => setScanning(true)} className={btnScanCls + ' mt-6'}>
           打开相机扫码
         </button>
       )}
 
-      <div className="divider">或上传图片识别</div>
+      <div className="my-5 text-center text-xs text-muted-soft">或上传图片识别</div>
 
-      <div className="upload-row">
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          disabled={busy || decoding}
-        >
+      <div className="flex justify-center">
+        <button type="button" onClick={() => fileRef.current?.click()} disabled={busy || decoding} className={btnSecondaryCls}>
           {decoding ? '识别中…' : '上传二维码图片'}
         </button>
         <input
@@ -137,9 +162,10 @@ export default function Scan() {
         />
       </div>
 
-      <div className="divider">或手动输入</div>
+      <div className="my-5 text-center text-xs text-muted-soft">或手动输入</div>
 
       <form
+        className="space-y-3"
         onSubmit={(e) => {
           e.preventDefault()
           void handleUrl(manual)
@@ -150,8 +176,9 @@ export default function Scan() {
           value={manual}
           rows={3}
           onChange={(e) => setManual(e.target.value)}
+          className={inputCls}
         />
-        <button type="submit" disabled={busy || !manual.trim()}>
+        <button type="submit" disabled={busy || !manual.trim()} className={btnPrimaryCls}>
           {busy ? '签到中…' : '签到'}
         </button>
       </form>

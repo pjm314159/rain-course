@@ -20,6 +20,8 @@ export const CLOSE_REPLACED = 4009
 
 const BASE_BACKOFF_MS = 1000
 const MAX_BACKOFF_MS = 30_000
+/** open 前排队消息上限（防无界堆积） */
+const MAX_PENDING = 50
 
 /** 最小 socket 接口（便于测试注入假实现） */
 export interface WsSocketLike {
@@ -64,6 +66,8 @@ export class WsConnection {
   private closedByUs = false
   /** 当前房间（重连后自动重新 join） */
   private currentRoom: { room: number; password?: string } | null = null
+  /** open 前到达的待发消息（如建房后立即 join），open 后按序补发 */
+  private pending: string[] = []
 
   constructor(opts: WsConnectionOptions, cb: WsConnectionCallbacks) {
     this.opts = opts
@@ -106,6 +110,11 @@ export class WsConnection {
         )
       } else {
         this.setStatus('lobby')
+      }
+      // 补发 open 前排队的消息；与自动 rejoin 重复的 join 跳过
+      for (const data of this.pending.splice(0)) {
+        if (this.isDuplicateJoin(data)) continue
+        this.sendRaw(data)
       }
     }
     sock.onmessage = (ev) => {
@@ -172,14 +181,27 @@ export class WsConnection {
     }, delay)
   }
 
+  /** 排队消息是否与自动 rejoin 重复（同房间 join） */
+  private isDuplicateJoin(data: string): boolean {
+    if (!this.currentRoom) return false
+    try {
+      const m = JSON.parse(data) as { type?: string; room?: number }
+      return m.type === 'join' && m.room === this.currentRoom.room
+    } catch {
+      return false
+    }
+  }
+
   private sendRaw(data: string): void {
     if (this.sock && this.status !== 'closed' && this.status !== 'idle') {
       try {
         this.sock.send(data)
+        return
       } catch {
-        // 发送失败等待 onclose 走重连
+        // socket 尚未 open（连接进行中）→ 入队等待补发
       }
     }
+    if (this.pending.length < MAX_PENDING) this.pending.push(data)
   }
 
   /** 发送业务消息；join/leave 同步维护重连恢复所需的房间记忆 */
@@ -204,6 +226,7 @@ export class WsConnection {
     this.cancelTimer?.()
     this.cancelTimer = null
     this.currentRoom = null
+    this.pending = []
     if (this.sock) {
       const sock = this.sock
       this.sock = null

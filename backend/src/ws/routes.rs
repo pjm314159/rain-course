@@ -12,7 +12,7 @@ use axum::Json;
 use axum::Router;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use futures_util::sink::SinkExt;
@@ -330,8 +330,15 @@ async fn create_room_route(
     Json(body): Json<CreateRoomBody>,
 ) -> Result<Response, AppError> {
     let user_id = require_session(&st, &headers)?;
+    // 房间名必填（便于口头传播与广场识别）
+    let name = body
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or(AppError::BadRoomInput("房间名不能为空"))?;
     let spec = CreateRoomSpec {
-        name: body.name,
+        name: Some(name.to_string()),
         password: body.password,
         qr_ttl_secs: body.qr_ttl_secs,
         lifetime_mins: body.lifetime_mins,
@@ -395,6 +402,7 @@ mod tests {
     use crate::config::Config;
     use axum::body::Body;
     use axum::extract::Request;
+    use axum::http::header;
     use tokio_tungstenite::tungstenite::Message as WsMessage;
     use tower::ServiceExt;
 
@@ -505,7 +513,12 @@ mod tests {
         assert!((100_000..1_000_000).contains(&room_id));
 
         // 广场 REST：公开房间可见、密码房间不可见
-        let resp = post_room(st.clone(), Some(&cookie), json!({"password": "pw"})).await;
+        let resp = post_room(
+            st.clone(),
+            Some(&cookie),
+            json!({"name": "习题课", "password": "pw"}),
+        )
+        .await;
         assert_eq!(body_json(resp).await["code"], 0);
 
         let resp = app(st.clone())
@@ -535,10 +548,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_room_requires_name() {
+        let st = state_with(Limits::default());
+        let cookie = sid_cookie(42);
+        for payload in [json!({}), json!({"name": "   "})] {
+            let resp = post_room(st.clone(), Some(&cookie), payload.clone()).await;
+            assert_eq!(body_json(resp).await["code"], 40306, "payload: {payload}");
+        }
+    }
+
+    #[tokio::test]
     async fn close_room_requires_owner() {
         let st = state_with(Limits::default());
         let owner = sid_cookie(1);
-        let resp = post_room(st.clone(), Some(&owner), json!({})).await;
+        let resp = post_room(st.clone(), Some(&owner), json!({"name": "待关闭"})).await;
         let room_id = body_json(resp).await["data"]["room_id"].as_u64().unwrap() as u32;
 
         // 非房主
@@ -627,7 +650,7 @@ mod tests {
     async fn ws_join_share_qr_flow_between_two_clients() {
         let st = state_with(Limits::default());
         // A 建房
-        let resp = post_room(st.clone(), Some(&sid_cookie(1)), json!({})).await;
+        let resp = post_room(st.clone(), Some(&sid_cookie(1)), json!({"name": "测试房"})).await;
         let room_id = body_json(resp).await["data"]["room_id"].as_u64().unwrap() as u32;
 
         let url = spawn_server(st).await;
@@ -687,7 +710,7 @@ mod tests {
         let resp = post_room(
             st.clone(),
             Some(&sid_cookie(1)),
-            json!({"password": "4321"}),
+            json!({"name": "密码房", "password": "4321"}),
         )
         .await;
         let room_id = body_json(resp).await["data"]["room_id"].as_u64().unwrap() as u32;
@@ -725,7 +748,7 @@ mod tests {
             ..Default::default()
         };
         let st = state_with(limits);
-        let resp = post_room(st.clone(), Some(&sid_cookie(1)), json!({})).await;
+        let resp = post_room(st.clone(), Some(&sid_cookie(1)), json!({"name": "限速房"})).await;
         let room_id = body_json(resp).await["data"]["room_id"].as_u64().unwrap() as u32;
         let url = spawn_server(st).await;
         let mut a = connect_ws(&url, Some(&token::issue(1, now_unix() + 3600, SECRET))).await;

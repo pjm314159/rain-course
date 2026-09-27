@@ -24,6 +24,9 @@
 - 许可证：全项目使用 GPL-3.0-or-later（LICENSE 为官方全文），`rust-version` 对齐本机 rustc 1.98；创建根 README.md
 
 ### Changed
+- 视觉样式复刻 `qrcode_share` 项目：前端引入 Tailwind CSS v4（`@theme` 设计令牌：奶油画布/墨色文字/品牌色板/Inter 字体），重刷导航与登录/扫码/房间/广场全部页面；房间内头部大号展示数字房间号（一键复制）
+- 房间名改为**必填**（后端空名校验 40306 + 前端必填标记）；`joined` 帧下发房间名，加入者可见
+- WS 连接 open 前到达的消息排队、open 后按序补发（与自动 rejoin 去重），修复"创建房间后偶发未自动进入房间"的竞态
 - 本站会话对齐雨课堂 `sessionid` 有效期：**14 天滑动续期**（已抓包确认 `sessionid` 14 天、`csrftoken` 1 年），签名 cookie 校验，无服务端会话存储
 - 会话方案从 tower-sessions → 签名 cookie（`axum-extra` `PrivateCookieJar`）
 - 存储决策：不引入数据库与 Redis，全部状态内存态；雨课堂凭证内存保存，服务重启需重新登录

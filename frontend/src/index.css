@@ -1,144 +1,90 @@
-:root {
-  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC",
-    "Microsoft YaHei", sans-serif;
-  line-height: 1.5;
-  color-scheme: light dark;
-}
+@import 'tailwindcss';
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+@theme {
+  --color-ink: #0a0a0a;
+  --color-ink-active: #1f1f1f;
+  --color-ink-disabled: #e5e5e5;
+  --color-body: #3a3a3a;
+  --color-body-strong: #1a1a1a;
+  --color-muted: #6a6a6a;
+  --color-muted-soft: #9a9a9a;
+  --color-hairline: #e5e5e5;
+  --color-hairline-soft: #f0f0f0;
+  --color-canvas: #fffaf0;
+  --color-surface-soft: #faf5e8;
+  --color-surface-card: #f5f0e0;
+  --color-surface-strong: #ebe6d6;
+  --color-surface-dark: #0a1a1a;
+  --color-surface-dark-elevated: #1a2a2a;
+  --color-on-primary: #ffffff;
+  --color-on-dark: #ffffff;
+  --color-on-dark-soft: #a0a0a0;
+  --color-brand-pink: #ff4d8b;
+  --color-brand-teal: #1a3a3a;
+  --color-brand-lavender: #b8a4ed;
+  --color-brand-peach: #ffb084;
+  --color-brand-ochre: #e8b94a;
+  --color-brand-mint: #a4d4c5;
+  --color-brand-coral: #ff6b5a;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
 
-body {
-  min-height: 100dvh;
-  display: flex;
-  place-items: center;
-  justify-content: center;
-  background: #f5f6f8;
-  color: #1f2329;
-}
+  --font-display: "Inter", sans-serif;
+  --font-body: "Inter", sans-serif;
 
-@media (prefers-color-scheme: dark) {
-  body {
-    background: #101418;
-    color: #e6e8eb;
+  --animate-fade-in: fadeIn 0.3s ease-in-out;
+  --animate-slide-up: slideUp 0.3s ease-out;
+  --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-slide-down: slideDown 0.2s ease-out;
+  --animate-slide-up-sm: slideUpSm 0.2s ease-out;
+
+  @keyframes fadeIn {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
+  }
+
+  @keyframes slideUp {
+    0% { transform: translateY(10px); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
+  }
+
+  @keyframes slideDown {
+    0% { opacity: 0; max-height: 0; overflow: hidden; }
+    100% { opacity: 1; max-height: 500px; overflow: hidden; }
+  }
+
+  @keyframes slideUpSm {
+    0% { transform: translateY(8px); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
   }
 }
 
-.page {
-  text-align: center;
-  padding: 2rem;
+:root {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-.page h1 {
-  font-size: 1.6rem;
-  margin-bottom: 0.5rem;
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: #fffaf0;
+  color: #0a0a0a;
 }
 
-.page p {
-  opacity: 0.7;
+#root {
+  min-height: 100vh;
 }
 
-.tabs {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: center;
-  margin: 1rem 0;
-}
-
-.tabs button {
-  padding: 0.4rem 0.9rem;
-  border: 1px solid #c9cdd4;
-  border-radius: 6px;
-  background: transparent;
-  cursor: pointer;
-}
-
-.tabs button.active {
-  background: #4e6ef2;
-  border-color: #4e6ef2;
-  color: #fff;
-}
-
-.page form,
-.page .qrcode,
-.page .camera {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  max-width: 22rem;
-  margin: 1rem auto 0;
-}
-
-.page input,
-.page textarea {
-  padding: 0.55rem 0.75rem;
-  border: 1px solid #c9cdd4;
-  border-radius: 6px;
-  font: inherit;
-}
-
-.page button {
-  padding: 0.55rem 0.9rem;
-  border: none;
-  border-radius: 6px;
-  background: #4e6ef2;
-  color: #fff;
-  font: inherit;
-  cursor: pointer;
-}
-
-.page button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.page .row {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.page .row input {
-  flex: 1;
-}
-
-.page .error {
-  color: #d93026;
-  opacity: 1;
-  margin-top: 1rem;
-}
-
-.page .success {
-  color: #1a9c63;
-  opacity: 1;
-  margin-top: 1rem;
-}
-
-.page .divider {
-  margin-top: 1.5rem;
-  font-size: 0.85rem;
-  opacity: 0.5;
-}
-
-.page .camera video {
-  width: 100%;
-  border-radius: 8px;
-  background: #000;
-  aspect-ratio: 4 / 3;
-  object-fit: cover;
-}
-
-.nav-logout {
-  position: fixed;
-  top: 1rem;
-  right: 1rem;
-  padding: 0.4rem 0.8rem;
-  border: 1px solid #c9cdd4;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

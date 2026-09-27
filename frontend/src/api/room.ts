@@ -4,7 +4,8 @@ import { api } from './client'
 import type { PlazaRoom, RoomMeta } from '../ws/protocol'
 
 export interface CreateRoomBody {
-  name?: string
+  /** 房间名（必填，服务端校验非空） */
+  name: string
   password?: string
   /** 单条消息有效期（秒，服务端钳制 (0,3600]） */
   qr_ttl_secs?: number
