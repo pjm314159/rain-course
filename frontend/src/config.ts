@@ -4,4 +4,6 @@ export const config = {
   apiBaseUrl: import.meta.env.VITE_API_BASE_URL ?? '',
   /** 腾讯验证码 AppId 兜底值（优先使用后端 /api/health 下发的值） */
   captchaAppIdFallback: import.meta.env.VITE_CAPTCHA_APP_ID ?? '2091064951',
+  /** ICP 备案号：仅部署方在生产机 frontend/.env.local 配置（已 gitignore）；留空则页脚不渲染 */
+  icpBeian: import.meta.env.VITE_ICP_BEIAN ?? '',
 } as const
