@@ -17,6 +17,12 @@ pub enum AppError {
     /// 验证码票据无效（雨课堂侧拒绝）
     #[error("验证码校验失败，请重新完成验证")]
     CaptchaRejected,
+    /// 二维码内容非法（非 HTTPS / 非白名单域名 / 非 URL），docs/SPEC.md §3.2.4
+    #[error("不是有效的雨课堂签到码")]
+    InvalidQrContent,
+    /// 雨课堂动态二维码过期（上游 51203）
+    #[error("动态二维码已过期，请获取最新签到码")]
+    QrExpired,
     /// 上游雨课堂返回的业务错误（携带其原始 code 与 msg）
     #[error("雨课堂错误 {upstream_code}: {message}")]
     Upstream { upstream_code: i64, message: String },
@@ -31,6 +37,8 @@ impl AppError {
         match self {
             AppError::Unauthorized => 40101,
             AppError::CaptchaRejected => 40201,
+            AppError::InvalidQrContent => 40301,
+            AppError::QrExpired => 51203,
             AppError::Upstream { upstream_code, .. } => 50000 + upstream_code.unsigned_abs() as i64,
             AppError::Internal(_) => 50000,
         }

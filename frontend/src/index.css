@@ -40,3 +40,105 @@ body {
 .page p {
   opacity: 0.7;
 }
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  margin: 1rem 0;
+}
+
+.tabs button {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid #c9cdd4;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tabs button.active {
+  background: #4e6ef2;
+  border-color: #4e6ef2;
+  color: #fff;
+}
+
+.page form,
+.page .qrcode,
+.page .camera {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 22rem;
+  margin: 1rem auto 0;
+}
+
+.page input,
+.page textarea {
+  padding: 0.55rem 0.75rem;
+  border: 1px solid #c9cdd4;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.page button {
+  padding: 0.55rem 0.9rem;
+  border: none;
+  border-radius: 6px;
+  background: #4e6ef2;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.page button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.page .row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.page .row input {
+  flex: 1;
+}
+
+.page .error {
+  color: #d93026;
+  opacity: 1;
+  margin-top: 1rem;
+}
+
+.page .success {
+  color: #1a9c63;
+  opacity: 1;
+  margin-top: 1rem;
+}
+
+.page .divider {
+  margin-top: 1.5rem;
+  font-size: 0.85rem;
+  opacity: 0.5;
+}
+
+.page .camera video {
+  width: 100%;
+  border-radius: 8px;
+  background: #000;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+}
+
+.nav-logout {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid #c9cdd4;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}

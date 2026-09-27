@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { BrowserRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { useAuth } from './stores/auth'
 import Login from './pages/Login'
+import Scan from './pages/Scan'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const userId = useAuth((s) => s.userId)
@@ -15,24 +16,21 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 function HomeWithNav() {
   const navigate = useNavigate()
-  return <HomeNav onLogout={() => void navigate('/login', { replace: true })} />
-}
-
-function HomeNav({ onLogout }: { onLogout: () => void }) {
-  const logout = useAuth((s) => s.logout)
-  const userId = useAuth((s) => s.userId)
   return (
-    <main className="page">
-      <h1>雨课堂签到助手</h1>
-      <p>已登录（user_id: {userId}）——扫码签到开发中</p>
+    <>
+      <Scan />
       <button
+        className="nav-logout"
         onClick={() => {
-          void logout().then(onLogout)
+          void useAuth
+            .getState()
+            .logout()
+            .then(() => navigate('/login', { replace: true }))
         }}
       >
         退出登录
       </button>
-    </main>
+    </>
   )
 }
 

@@ -38,10 +38,9 @@ impl Config {
                 .unwrap_or(14 * 24 * 60 * 60),
             captcha_app_id: lookup("YK_CAPTCHA_APP_ID").unwrap_or_else(|| "2091064951".into()),
             yk_base_url: lookup("YK_BASE_URL").unwrap_or_else(|| "https://www.yuketang.cn".into()),
-            yk_allowed_hosts: parse_hosts(
-                &lookup("YK_ALLOWED_HOSTS")
-                    .unwrap_or_else(|| "www.yuketang.cn,pro.yuketang.cn".into()),
-            ),
+            yk_allowed_hosts: parse_hosts(&lookup("YK_ALLOWED_HOSTS").unwrap_or_else(|| {
+                "www.yuketang.cn,pro.yuketang.cn,changjiang.yuketang.cn,huanghe.yuketang.cn".into()
+            })),
             log_dir: lookup("LOG_DIR").unwrap_or_else(|| "logs".into()),
         }
     }
@@ -80,7 +79,12 @@ mod tests {
         assert_eq!(c.captcha_app_id, "2091064951");
         assert_eq!(
             c.yk_allowed_hosts,
-            vec!["www.yuketang.cn", "pro.yuketang.cn"]
+            vec![
+                "www.yuketang.cn",
+                "pro.yuketang.cn",
+                "changjiang.yuketang.cn",
+                "huanghe.yuketang.cn"
+            ]
         );
     }
 

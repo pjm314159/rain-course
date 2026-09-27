@@ -6,6 +6,7 @@
 mod auth;
 mod config;
 mod error;
+mod signin;
 
 use std::sync::Arc;
 
@@ -38,7 +39,9 @@ fn build_app(cfg: Arc<Config>) -> Router {
     let health = Router::new()
         .route("/api/health", get(health))
         .with_state(cfg);
-    auth::routes::router(state).merge(health)
+    auth::routes::router(state.clone())
+        .merge(signin::routes::router(state))
+        .merge(health)
 }
 
 #[tokio::main]

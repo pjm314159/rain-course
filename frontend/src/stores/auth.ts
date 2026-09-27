@@ -7,6 +7,8 @@ interface AuthState {
   probe: () => Promise<void>
   /** 登录成功后由调用方设置 */
   setUserId: (id: number) => void
+  /** 会话过期（40101）时清空登录态 */
+  clear: () => void
   logout: () => Promise<void>
 }
 
@@ -21,6 +23,7 @@ export const useAuth = create<AuthState>((set) => ({
     }
   },
   setUserId: (id) => set({ userId: id }),
+  clear: () => set({ userId: null }),
   logout: async () => {
     await api.post('/api/auth/logout')
     set({ userId: null })
