@@ -28,6 +28,10 @@
   - 后端 WS：连接进房后退订 lobby 广播、回广场时重新订阅，使广场全量 `plaza_update` 只发给广场页连接；`broadcast_plaza` 在无 lobby 订阅者时提前返回；`share_qr` 内容分配由 3 次降为 2 次
 
 ### Added
+- Docker Compose 一键部署（M6，见 `docs/DESIGN.md` §8）：`backend/Dockerfile`（多阶段 `rust:1-bookworm` → `debian:bookworm-slim`，先用假入口把依赖编出来以复用层缓存、非 root uid 10001 运行、装 `curl` 供 healthcheck）、`frontend/Dockerfile`（多阶段 `node:24-bookworm-slim` → `nginx:stable-alpine`，`VITE_*` 经 `build.args` 注入）、根 `docker-compose.yml`（只对外暴露 80、TLS 交前置反代；backend 不映射端口且 frontend 以 `service_healthy` 依赖它；`mem_limit` 512m/128m 对齐 2 核 2G 预算；日志命名卷 `logs` 持久化）与两端 `.dockerignore`
+- 前端网关 `frontend/nginx.conf`：`/api` 反代读超时 120s（覆盖微信扫码登录的 30s 服务端长轮询）、`/ws` 透传 `Upgrade`/`Connection` 且读超时 300s、显式 `gzip_types` + `gzip_vary` + `gzip_static`、`/assets/` 长缓存 `immutable` 而 `index.html` 强制 `no-cache`、SPA `try_files ... /index.html`；末尾附「容器内终结 TLS」注释模板
+- 前端构建期 gzip 预压缩：接入 `vite-plugin-compression2`，构建产出 `.gz`（index.js 325KB → 101KB、css 31KB → 6KB）配合 nginx `gzip_static` 直出，省去运行时压缩 CPU
+- 根 `.env.example` 补充 Docker 部署用法说明与前端构建期变量（`VITE_*`）——compose 部署下该文件同时承担容器环境变量注入与 `build.args` 取值两个角色；`README.md` 新增「部署（Docker Compose）」章节（部署命令、端口/TLS、2G 机器 swap 建议、升级流程）
 - 微信 JS-SDK 可用性预检查（M5）：后端 `GET /api/wechat/status`（免会话）返回 `{available, reason}`，只暴露「是否已配置」不含凭证；前端房间页仅在「微信内 且 后端判定可用」时才渲染「微信扫一扫」入口，未配置时完全不显示（避免点击后才报 40307）
 - 微信真机调试开关（M5）：`frontend/.env` 设 `VITE_WX_DEBUG=true` 时 `wx.config({debug:true})`，在微信真机上以 alert 弹窗输出签名校验细节，便于定位 `invalid signature`（默认关闭，上线留空）
 - 微信 JS-SDK 扫码签到（M5）后端 `backend/src/wechat/`：`GET /api/wechat/jssdk-signature?url=` 返回 `{appId,timestamp,nonceStr,signature}`；`WechatClient` 内存缓存 `access_token` / `jsapi_ticket`（默认 7200s，提前 300s 刷新；`tokio::sync::RwLock` 保证不跨 `await` 持锁），签名串 `jsapi_ticket=..&noncestr=..&timestamp=..&url=..` 取 **plain SHA1**（新增 `sha1` 依赖），`url` 自动去除 `#` 及其后部分；公众号凭证经 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 注入，未配置时返回 40307（不 panic）
