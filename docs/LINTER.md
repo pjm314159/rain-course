@@ -46,12 +46,38 @@ pnpm typecheck   # tsc -b（提交前必须通过）
 
 ## 3. 通用
 
+- **TDD 强制**：所有功能开发遵循红-绿-重构循环（见 §4），测试先行；
 - **测试必须通过**：后端 `cargo test`、前端 `pnpm test`（如引入测试框架）全部绿色才算通过；核心逻辑（二维码校验、房间状态机、限流）必须有单元测试覆盖；
 - 提交信息遵循 Conventional Commits（`feat:` / `fix:` / `docs:` / `refactor:` / `chore:`）；
 - 文档（`docs/*.md`）改动需同步更新 `CHANGELOG.md`；
 - 新增依赖需说明理由，优先选维护活跃、无重复功能的库。
 
-## 4. Git 工作流（双分支模型）
+## 4. TDD 工作流（红-绿-重构）
+
+所有功能代码按以下循环开发，**禁止先写实现再补测试**：
+
+```
+红（Red）        先写失败的测试——测试描述的是"期望行为"而非"实现细节"
+   ↓
+绿（Green）      用最简单的实现让测试通过，不追求优雅
+   ↓
+重构（Refactor） 消除重复、改善命名、抽公共逻辑，测试保持绿色
+```
+
+**落地规则：**
+
+1. **提交粒度**：一个红-绿-重构循环对应一个提交（或 squash 前的一次提交），提交信息如 `test(auth): 签名 cookie 过期校验` / `feat(auth): 实现 cookie 签名`；
+2. **测试优先级**（每个模块按此顺序写测试）：
+   - 后端：核心纯逻辑（签名 cookie、二维码校验、消息队列淘汰、限流）→ HTTP 层（axum `tower::ServiceExt::oneshot` 打路由）→ 外部客户端（mock HTTP，mockito/wiremock）；
+   - 前端：纯函数与 store（vitest）→ 组件交互（testing-library）；
+3. **测试即文档**：测试名用行为描述（`expired_token_is_rejected` 而非 `test_verify_2`）；
+4. **禁止事项**：
+   - 禁止为通过测试而在实现里硬编码测试数据；
+   - 禁止删除/跳过失败测试来"变绿"（`#[ignore]` 必须附 issue 说明）；
+   - 禁止 mock 你不拥有的东西（mock 雨课堂 HTTP 边界，不 mock reqwest 内部）；
+5. **外部接口先实测后固化**：如雨课堂登录实测（.temp/scripts/），用实测结果作为测试的期望值。
+
+## 5. Git 工作流（双分支模型）
 
 分支模型：`main`（生产，受保护）+ `dev`（集成分支，受保护）。
 
@@ -73,7 +99,7 @@ dev ──▶ feature/x ──▶ dev（合并）──▶ push ──▶ CI 通
 6. 合并方式：feature → `dev` 用 squash；`dev` → `main` 用 merge commit（保留版本边界）；
 7. 合并后删除 feature 分支；`main` 合并后打 tag（`v0.x.y`）。
 
-## 5. PR 模板与 CI
+## 6. PR 模板与 CI
 
 - PR 描述使用 `.github/pull_request_template.md` 模板；
 - CI（`.github/workflows/ci.yml`）在 push 到 `main`/`dev` 和所有 PR 上运行：
@@ -81,7 +107,7 @@ dev ──▶ feature/x ──▶ dev（合并）──▶ push ──▶ CI 通
   - 前端（pnpm）：`eslint`、`tsc --noEmit`、测试、构建
 - **CI 不绿不允许合并**（分支保护强制）。
 
-## 6. 落地方式
+## 7. 落地方式
 
 - 后端：`Cargo.toml` 中配置 `[lints.clippy]`（`unwrap_used = "deny"` 等），使 `cargo clippy` 直接生效；
 - 前端：使用脚手架自带的 `oxlint`（配置 `frontend/.oxlintrc.json`），规则按 §2 调整；
