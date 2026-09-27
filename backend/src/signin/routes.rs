@@ -88,23 +88,27 @@ mod tests {
     const VALID_URL: &str = "https://www.yuketang.cn/c/abc123";
 
     fn app_with(yk_base: &str, rain_cookie: Option<&str>) -> Router {
-        let mut sessions = std::collections::HashMap::new();
-        if let Some(c) = rain_cookie {
-            sessions.insert(42, c.to_string());
-        }
-        router(Arc::new(AppState {
-            config: Config {
+        let state = Arc::new(AppState::new(
+            Config {
                 server_secret: "test-secret".into(),
                 port: 3000,
                 cookie_ttl_secs: 14 * 24 * 60 * 60,
                 captcha_app_id: "2091064951".into(),
                 yk_base_url: yk_base.into(),
                 yk_allowed_hosts: vec!["www.yuketang.cn".into()],
+                limits: Default::default(),
                 log_dir: "logs".into(),
             },
-            yk: YkClient::new(yk_base),
-            sessions: std::sync::RwLock::new(sessions),
-        }))
+            YkClient::new(yk_base),
+        ));
+        if let Some(c) = rain_cookie {
+            state
+                .sessions
+                .write()
+                .expect("lock")
+                .insert(42, c.to_string());
+        }
+        router(state)
     }
 
     fn sid_cookie(user_id: i64) -> String {

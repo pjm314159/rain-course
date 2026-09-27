@@ -28,6 +28,21 @@ pub struct AppState {
     pub yk: YkClient,
     /// user_id → 雨课堂 Cookie 头（内存态，重启即失）
     pub sessions: RwLock<HashMap<i64, String>>,
+    /// WS 房间 Hub（docs/DESIGN.md §4，内存态）
+    pub hub: Arc<crate::ws::hub::Hub>,
+}
+
+impl AppState {
+    /// 统一构造（Hub 使用配置中的 limits）
+    pub fn new(config: Config, yk: YkClient) -> Self {
+        let hub = Arc::new(crate::ws::hub::Hub::new(config.limits.clone()));
+        Self {
+            config,
+            yk,
+            sessions: RwLock::new(HashMap::new()),
+            hub,
+        }
+    }
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -220,19 +235,19 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn app_with(yk_base: &str) -> Router {
-        router(Arc::new(AppState {
-            config: Config {
+        router(Arc::new(AppState::new(
+            Config {
                 server_secret: "test-secret".into(),
                 port: 3000,
                 cookie_ttl_secs: 14 * 24 * 60 * 60,
                 captcha_app_id: "2091064951".into(),
                 yk_base_url: yk_base.into(),
                 yk_allowed_hosts: vec!["www.yuketang.cn".into()],
+                limits: Default::default(),
                 log_dir: "logs".into(),
             },
-            yk: YkClient::new(yk_base),
-            sessions: RwLock::new(HashMap::new()),
-        }))
+            YkClient::new(yk_base),
+        )))
     }
 
     fn app() -> Router {
@@ -402,19 +417,19 @@ mod tests {
     #[tokio::test]
     async fn login_stores_rain_cookies_in_memory() {
         let server = mock_upstream_login_ok().await;
-        let state = Arc::new(AppState {
-            config: Config {
+        let state = Arc::new(AppState::new(
+            Config {
                 server_secret: "test-secret".into(),
                 port: 3000,
                 cookie_ttl_secs: 14 * 24 * 60 * 60,
                 captcha_app_id: "2091064951".into(),
                 yk_base_url: server.uri(),
                 yk_allowed_hosts: vec![],
+                limits: Default::default(),
                 log_dir: "logs".into(),
             },
-            yk: YkClient::new(&server.uri()),
-            sessions: RwLock::new(HashMap::new()),
-        });
+            YkClient::new(&server.uri()),
+        ));
         state.clone().oneshot_login("13800000000").await;
         let stored = state.sessions.read().expect("lock").get(&42).cloned();
         assert_eq!(stored, Some("sessionid=abc123; csrftoken=tok99".into()));

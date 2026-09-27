@@ -7,6 +7,7 @@ mod auth;
 mod config;
 mod error;
 mod signin;
+mod ws;
 
 use std::sync::Arc;
 
@@ -31,16 +32,18 @@ async fn health(State(cfg): State<Arc<Config>>) -> Response {
 }
 
 fn build_app(cfg: Arc<Config>) -> Router {
-    let state = Arc::new(auth::routes::AppState {
-        config: Config::clone(&cfg),
-        yk: auth::yk_client::YkClient::new(&cfg.yk_base_url),
-        sessions: std::sync::RwLock::new(std::collections::HashMap::new()),
-    });
+    let state = Arc::new(auth::routes::AppState::new(
+        (*cfg).clone(),
+        auth::yk_client::YkClient::new(&cfg.yk_base_url),
+    ));
+    // 后台巡检：心跳假死判死 / lobby 空闲回收（close 4000）/ 房间到期与 14 天无消息回收
+    ws::routes::spawn_sweeper(state.hub.clone(), cfg.limits.clone());
     let health = Router::new()
         .route("/api/health", get(health))
         .with_state(cfg);
     auth::routes::router(state.clone())
-        .merge(signin::routes::router(state))
+        .merge(signin::routes::router(state.clone()))
+        .merge(ws::routes::router(state))
         .merge(health)
 }
 
