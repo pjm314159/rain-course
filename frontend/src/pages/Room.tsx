@@ -1,22 +1,19 @@
-// 房间页：创建/加入（含密码）→ 成员列表 + 二维码分享/倒计时 + 签到回执
-// docs/DESIGN.md §4、§7；验收标准 docs/SPEC.md §3.3.4
+// 房间页：房间内视图（成员 + 二维码分享/倒计时 + 签到回执）
+// 加入入口在广场页（点卡片详情「扫描二维码」）；docs/DESIGN.md §4、§7
 
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../api/client'
-import { closeRoom, createRoom } from '../api/room'
+import { closeRoom } from '../api/room'
 import { submitSign } from '../api/sign'
 import { startQrScan, type ScannerHandle } from '../lib/qr-scan'
 import { useNow } from '../lib/use-now'
 import { useAuth } from '../stores/auth'
 import { useRoom } from '../stores/room'
 import { getWs } from '../ws/client'
-import type { RoomMeta } from '../ws/protocol'
 
-// 视觉样式常量（参照 qrcode_share 的 Card/Input/Button 设计令牌）
+// 视觉样式常量（延续 qrcode_share 设计令牌）
 const cardCls = 'rounded-lg border border-hairline bg-canvas p-4'
-const cardCreamCls = 'rounded-lg bg-surface-card p-6'
-const labelCls = 'block text-sm font-medium text-ink'
 const inputCls =
   'mt-1 w-full rounded-md border border-hairline bg-canvas px-4 py-3 text-sm text-ink transition-colors duration-150 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/20'
 const btnPrimaryCls =
@@ -86,182 +83,6 @@ function QrCard({ raw, by, expireAt }: { raw: string; by: number; expireAt: numb
         </p>
       )}
     </li>
-  )
-}
-
-function CreateForm() {
-  const [name, setName] = useState('')
-  const [password, setPassword] = useState('')
-  const [ttlMins, setTtlMins] = useState(60)
-  const [permanent, setPermanent] = useState(false)
-  const [lifetimeMins, setLifetimeMins] = useState(240)
-  const [advanced, setAdvanced] = useState(false)
-  const [meta, setMeta] = useState<RoomMeta>({})
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault()
-    if (busy) return
-    const trimmed = name.trim()
-    if (!trimmed) {
-      setErr('请填写房间名')
-      return
-    }
-    setBusy(true)
-    setErr(null)
-    try {
-      const { room_id } = await createRoom({
-        name: trimmed,
-        password: password.trim() || undefined,
-        qr_ttl_secs: Math.min(3600, Math.max(1, Math.floor(ttlMins * 60))),
-        permanent,
-        lifetime_mins: permanent ? undefined : Math.max(1, lifetimeMins),
-        meta: Object.values(meta).some((v) => v?.trim()) ? meta : undefined,
-      })
-      // 创建成功即自动进入房间；WS 未 open 时由连接层排队补发
-      getWs().send({ type: 'join', room: room_id, password: password.trim() || undefined })
-    } catch (e2) {
-      setErr(e2 instanceof ApiError ? e2.message : '创建失败，请重试')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const metaField = (key: keyof RoomMeta, label: string) => (
-    <label className={labelCls}>
-      {label}
-      <input
-        className={inputCls}
-        value={meta[key] ?? ''}
-        onChange={(e) => setMeta({ ...meta, [key]: e.target.value })}
-      />
-    </label>
-  )
-
-  return (
-    <form className={cardCreamCls + ' space-y-4'} onSubmit={(e) => void submit(e)}>
-      <h2 className="text-lg font-semibold text-ink">创建房间</h2>
-      <label className={labelCls}>
-        房间名<span className="text-brand-pink"> *</span>
-        <input
-          className={inputCls}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          maxLength={32}
-          required
-          placeholder="例如：周一高数课"
-        />
-      </label>
-      <label className={labelCls}>
-        房间密码（可选）
-        <input
-          className={inputCls}
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          maxLength={64}
-        />
-      </label>
-      <label className={labelCls}>
-        消息有效期（分钟，≤60）
-        <input
-          className={inputCls}
-          type="number"
-          min={1}
-          max={60}
-          value={ttlMins}
-          onChange={(e) => setTtlMins(Number(e.target.value) || 60)}
-        />
-      </label>
-      <label className="flex items-center gap-2 text-sm text-ink">
-        <input
-          className="h-4 w-4 accent-ink"
-          type="checkbox"
-          checked={permanent}
-          onChange={(e) => setPermanent(e.target.checked)}
-        />
-        永久房间（14 天无消息仍会被回收）
-      </label>
-      {!permanent && (
-        <label className={labelCls}>
-          生命周期（分钟，默认 240 = 4 小时）
-          <input
-            className={inputCls}
-            type="number"
-            min={1}
-            value={lifetimeMins}
-            onChange={(e) => setLifetimeMins(Number(e.target.value) || 240)}
-          />
-        </label>
-      )}
-      <button
-        type="button"
-        className="flex items-center gap-1 text-sm text-muted transition-colors hover:text-ink"
-        onClick={() => setAdvanced(!advanced)}
-      >
-        {advanced ? '收起课程信息' : '填写课程信息（可选）'}
-      </button>
-      {advanced && (
-        <div className="grid grid-cols-2 gap-3 animate-slide-down">
-          {metaField('course_name', '课程名称')}
-          {metaField('location', '上课地点')}
-          {metaField('teacher', '教师')}
-          {metaField('time', '上课时间')}
-          {metaField('class_name', '班级')}
-        </div>
-      )}
-      {err && <p className="text-sm text-error">{err}</p>}
-      <button type="submit" className={btnPrimaryCls} disabled={busy}>
-        {busy ? '创建中…' : '创建房间'}
-      </button>
-    </form>
-  )
-}
-
-function JoinForm() {
-  const needPassword = useRoom((s) => s.needPassword)
-  const lastError = useRoom((s) => s.lastError)
-  const [room, setRoom] = useState('')
-  const [password, setPassword] = useState('')
-  const roomId = Number(room)
-
-  function submit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!Number.isInteger(roomId) || roomId <= 0) return
-    getWs().send({ type: 'join', room: roomId, password: password.trim() || undefined })
-  }
-
-  return (
-    <form className={cardCreamCls + ' space-y-4'} onSubmit={submit}>
-      <h2 className="text-lg font-semibold text-ink">加入房间</h2>
-      <label className={labelCls}>
-        房间号
-        <input
-          className={inputCls}
-          inputMode="numeric"
-          value={room}
-          onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))}
-          placeholder="6 位数字房间号"
-        />
-      </label>
-      {(needPassword || password) && (
-        <label className={labelCls}>
-          房间密码
-          <input
-            className={inputCls}
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoFocus={needPassword}
-          />
-        </label>
-      )}
-      {lastError && <p className="text-sm text-error">{lastError.msg}</p>}
-      <button type="submit" className={btnPrimaryCls} disabled={!roomId}>
-        加入房间
-      </button>
-    </form>
   )
 }
 
@@ -499,16 +320,23 @@ export default function Room() {
         {room === null && (
           <>
             {' · '}
-            <Link to="/plaza" className="font-medium text-brand-pink hover:underline">
-              去广场看看
+            <Link to="/" className="font-medium text-brand-pink hover:underline">
+              去广场
             </Link>
           </>
         )}
       </p>
       {room === null ? (
-        <div className="mt-6 grid gap-6 md:grid-cols-2">
-          <CreateForm />
-          <JoinForm />
+        // 直接访问 /room 未加入任何房间 → 空态引导回广场
+        <div className="mt-6 rounded-lg bg-surface-card p-8 text-center">
+          <p className="text-lg font-medium text-ink">尚未加入房间</p>
+          <p className="mt-1 text-sm text-muted">到广场加入一个公开房间，或创建自己的房间</p>
+          <Link
+            to="/"
+            className="mt-4 inline-flex items-center justify-center rounded-md bg-ink px-5 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-ink-active"
+          >
+            去广场
+          </Link>
         </div>
       ) : (
         <InRoomView />

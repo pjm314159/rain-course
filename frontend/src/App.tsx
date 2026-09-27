@@ -4,7 +4,6 @@ import { bindWsToStore } from './stores/room'
 import { useAuth } from './stores/auth'
 import { getWs } from './ws/client'
 import Login from './pages/Login'
-import Scan from './pages/Scan'
 import Room from './pages/Room'
 import Plaza from './pages/Plaza'
 
@@ -20,6 +19,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 function HomeWithNav() {
   const navigate = useNavigate()
+  // 广场是默认落地页；扫码签到已并入房间内（分享签到码），不再有独立页
   const navLinkCls = (isActive: boolean) =>
     `rounded-md px-3 py-2 text-sm font-medium transition-colors ${
       isActive ? 'text-ink' : 'text-muted hover:bg-surface-soft hover:text-ink'
@@ -30,12 +30,6 @@ function HomeWithNav() {
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
           <nav className="flex items-center gap-1">
             <NavLink to="/" className={({ isActive }) => navLinkCls(isActive)}>
-              扫码签到
-            </NavLink>
-            <NavLink to="/room" className={({ isActive }) => navLinkCls(isActive)}>
-              分享房间
-            </NavLink>
-            <NavLink to="/plaza" className={({ isActive }) => navLinkCls(isActive)}>
               广场
             </NavLink>
           </nav>
@@ -55,9 +49,8 @@ function HomeWithNav() {
         </div>
       </header>
       <Routes>
-        <Route path="/" element={<Scan />} />
+        <Route path="/" element={<Plaza />} />
         <Route path="/room" element={<Room />} />
-        <Route path="/plaza" element={<Plaza />} />
       </Routes>
     </div>
   )
