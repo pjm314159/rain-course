@@ -268,8 +268,9 @@ frontend/src/
 │   ├── worker.ts      # SharedWorker 脚本：同源所有标签页共享一条连接
 │   └── client.ts      # WsHandle：优先 SharedWorker，降级 BroadcastChannel + localStorage
 │                      #   选主（TTL 4s）；leader 直驱连接（BC 不回显发送者）；getWs() 单例
-├── lib/          # qr-scan（相机 BarcodeDetector→zxing 降级 + 图片解码）、use-now 倒计时
-├── pages/        # Login / Scan / Room / Plaza
+├── lib/          # qr-scan（相机 BarcodeDetector→zxing 降级）、use-now 倒计时
+├── pages/        # Login / Plaza（首页：搜索+房间卡片+创建/加入对话框）/ Room（房间内：扫码分享、签到码列表）
+├── components/   # Modal（对话框基础组件，遮罩/Esc 关闭）
 ├── stores/       # zustand: auth store；room store（服务端帧 → UI 状态的纯 reducer，消息 expire_at 倒计时过滤）
 ├── captcha.ts    # 腾讯验证码弹窗（TJCaptcha，AppId 2091064951）
 └── config.ts     # VITE_API_BASE_URL / 验证码 AppId 兜底
