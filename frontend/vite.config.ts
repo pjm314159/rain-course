@@ -8,10 +8,14 @@ export default defineConfig({
   plugins: [react(), babel({ presets: [reactCompilerPreset()] })],
   server: {
     proxy: {
-      // 开发期把 /api 转发到本地后端（生产由 nginx 反代）
+      // 开发期把 /api、/ws 转发到本地后端（生产由 nginx 反代）
       '/api': {
         target: 'http://localhost:3000',
         changeOrigin: true,
+      },
+      '/ws': {
+        target: 'ws://localhost:3000',
+        ws: true,
       },
     },
   },

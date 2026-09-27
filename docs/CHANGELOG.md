@@ -5,6 +5,10 @@
 ## [Unreleased]
 
 ### Added
+- 分享房间模块（F3，M3）后端 `backend/src/ws/`：`Hub` 内存态房间管理（创建/加入/密码校验+限速/成员列表/历史消息 FIFO≤100 条+有效期淘汰/自定义生命周期）；`GET /ws` 握手校验本站会话、单用户单连接（旧连接 close 4009）；`POST /api/rooms`、`DELETE /api/rooms/{id}`、`GET /api/plaza`；后台 sweep 任务（心跳假死判死、lobby 空闲 10 分钟回收 close 4000、消息频率超限 close 4008、房间到期/14 天无消息回收）
+- 分享房间前端 WS 客户端 `frontend/src/ws/`：协议类型与后端 `models.rs` 对齐（信封 `{type,seq,...}`、error 码表）；单连接状态机 idle/connecting/lobby/reconnecting/in_room/closed——心跳自动 pong、意外断开指数退避重连 1s→30s、重连自动 rejoin（joined 全量补齐）、4000/4008/4009 与 error 40404 不重连；SharedWorker 多标签页单连接复用，降级 BroadcastChannel + localStorage 选主（TTL 4s，leader 直驱连接规避不回显问题）
+- 分享房间前端页面：房间页（创建/加入/密码、成员列表、二维码分享与 expire_at 倒计时、签到回执 feed、粘贴推送、离开/关闭房间）与广场页（REST 首次拉取 + WS `plaza_update` 实时覆盖，公开房间点击即加入）
+- `.env.example`：补全 `WS_*` 房间资源上限配置项（房间数/人数/消息大小/频率/存量/心跳/空闲回收/密码限速等，全部可调）
 - 需求规格 `docs/SPEC.md`：登录（密码/短信/微信扫码三种方式，均必做）、扫码签到（微信 JS-SDK 优先、浏览器相机降级、手动输入兜底）、WebSocket 分享房间（房间密码、房间关联课程信息）、广场（公开房间发现）、查看当前课程（F5）
 - 技术设计 `docs/DESIGN.md`：axum + Vite/React + Nginx + Docker Compose 架构；REST/WS 协议设计；扫码内容域名白名单校验（防 SSRF）；雨课堂真实接口细节（源自 `course_helper` 源码分析）；资源上限设计（房间数/人数/消息大小/频率/存量有界）
 - `docs/LINTER.md`：代码风格与静态检查规范，含双分支 Git 工作流、PR 规范、测试要求

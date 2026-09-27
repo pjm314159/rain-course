@@ -127,7 +127,7 @@ S→C member_join/member_leave { room, members[] }   # 全量成员列表同步�
 
 - 未加入任何房间的 WS 连接处于 "lobby" 态；
 - 服务端房间增删/人数变化时向 lobby 连接广播 `plaza_update { rooms[] }`（全量列表；公开房间数少，全量最简单且无一致性问题）；
-- 前端广场页 = 首次 `GET /api/plaza` + WS `plaza_update` 覆盖；未连 WS 时退化为 5s 轮询；
+- 前端广场页 = 首次 `GET /api/plaza` + WS `plaza_update` 覆盖（进入广场页时按需建连）；WS 未连上时仅展示 REST 结果，加入动作触发重连；
 - 密码房间不进入 `plaza_update` 列表，任何接口不可枚举。
 
 ### 4.4 连接管理
@@ -137,7 +137,7 @@ S→C member_join/member_leave { room, members[] }   # 全量成员列表同步�
   - 多标签页通过 `SharedWorker` 复用同一条连接（不支持时降级 `BroadcastChannel` + localStorage 选举主标签页持有连接）；
   - 服务端下发的消息由持有连接的一端分发给所有标签页（BroadcastChannel 转发）；
   - 重连统一由连接持有者负责（指数退避 1s→2s→4s…上限 30s），避免多标签页各自重连造成连接风暴；
-  - 重连成功后重新 `join`，服务端回 `joined` 全量补齐（成员 + 当天历史消息）；
+  - 重连成功后重新 `join`，服务端回 `joined` 全量补齐（成员 + 未过期历史消息）；恢复期间收到 `error 40404`（房间已关闭/不存在）则放弃恢复、回到 lobby 等待用户操作；
 - **空闲回收（防"空置"）**：
   - lobby（未加入任何房间）连接闲置 **10 分钟**由服务端主动断开（close code 4000 = idle），用户回到广场页时再重连；
   - 房间内连接随房间生命周期存活；
@@ -221,7 +221,7 @@ struct YkSession {              // 每用户一份，仅内存
 }
 ```
 
-- 全局共享状态 `Arc<Hub>` + `RwLock`；每房间一个 `tokio::sync::broadcast` channel（**有界容量**，如 64，满则丢弃最旧）；
+- 全局共享状态 `Arc<Hub>`；房间表/连接表用 `std::sync::Mutex` 保护（临界区内不跨 await）；每房间一个 `tokio::sync::broadcast` channel（**有界容量**，如 64，满则丢弃最旧）；
 - **资源上限（防 OOM，全部来自 config，可调）**：
 
 ```rust
@@ -232,14 +232,19 @@ struct Limits {
     max_msg_bytes:    usize,  // 单条消息上限，默认 2048
     msgs_per_min:     u32,    // 单连接消息频率上限，默认 30，超限 close(4008)
     max_msgs_per_room: usize, // 每频道消息队列上限（FIFO），默认 100
-    qr_ttl_max_secs:  u64,    // 单条消息有效期上限，默认 3600
+    qr_ttl_max_secs:  u64,    // 单条消息有效期上限，默认 3600（配置只允许调小）
     room_inactivity_ttl: Duration, // 无消息自动删除阈值，默认 14 天
     max_connections:  usize,  // 全局 WS 连接上限，默认 500
+    heartbeat_interval_secs: u64,    // 服务端心跳周期，默认 30
+    heartbeat_dead_after_secs: u64,  // 超时未收到任何消息判死，默认 60
+    lobby_idle_secs: u64,     // lobby 空闲回收，默认 600，close 4000
+    room_default_lifetime_secs: u64, // 房间默认生命周期，默认 4h
+    pw_attempts_per_min: u32, // 房间密码错误尝试上限，默认 5
 }
 ```
 
-- 建房/加房/收消息路径上逐项检查；历史消息全保留但有界（每频道 ≤ 100 条/天），广播 channel 有界 → 内存占用有确定上界：`100 房间 × 100 条 × ~0.5KB ≈ 5MB` 最坏情况，2G 机器无压力。
-- 会话：签名 cookie（`user_id` + `exp` + HMAC），30 天滑动续期；登出即清除 cookie。
+- 建房/加房/收消息路径上逐项检查；历史消息全保留但有界（每频道 FIFO ≤ 100 条），广播 channel 有界 → 内存占用有确定上界：`100 房间 × 100 条 × ~0.5KB ≈ 5MB` 最坏情况，2G 机器无压力。
+- 会话：签名 cookie（`user_id` + `exp` + HMAC），14 天滑动续期；登出即清除 cookie。
 
 ### 6.1 凭证与会话（无数据库）
 
@@ -250,19 +255,29 @@ struct Limits {
 
 ---
 
-## 7. 前端结构（草案）
+## 7. 前端结构
 
 ```
 frontend/src/
-├── api/          # fetch 封装、错误码拦截、TS 类型定义
-├── ws/           # WS 客户端：SharedWorker 单连接复用（多标签页共享，BroadcastChannel 分发），状态机 idle/lobby/in_room/reconnecting
-├── pages/        # Login / Scan / Room / Plaza / Courses
-├── components/   # 扫码器（BarcodeDetector→zxing 降级）、房间列表、倒计时标签、腾讯验证码弹窗（TJCaptcha，AppId 2091064951）
-└── stores/       # zustand: auth store, room store
+├── api/          # fetch 封装（JSON 信封解析、needsLogin 拦截）、sign / room / auth REST
+├── ws/
+│   ├── protocol.ts    # 消息类型（与后端 models.rs 对齐）、WS error 码、帧解析
+│   ├── connection.ts  # 单连接状态机 idle/connecting/lobby/reconnecting/in_room/closed：
+│   │                  #   心跳自动 pong、指数退避重连 1s→30s、重连自动 rejoin、
+│   │                  #   4000/4008/4009 不重连、error 40404 放弃恢复
+│   ├── worker.ts      # SharedWorker 脚本：同源所有标签页共享一条连接
+│   └── client.ts      # WsHandle：优先 SharedWorker，降级 BroadcastChannel + localStorage
+│                      #   选主（TTL 4s）；leader 直驱连接（BC 不回显发送者）；getWs() 单例
+├── lib/          # qr-scan（相机 BarcodeDetector→zxing 降级 + 图片解码）、use-now 倒计时
+├── pages/        # Login / Scan / Room / Plaza
+├── stores/       # zustand: auth store；room store（服务端帧 → UI 状态的纯 reducer，消息 expire_at 倒计时过滤）
+├── captcha.ts    # 腾讯验证码弹窗（TJCaptcha，AppId 2091064951）
+└── config.ts     # VITE_API_BASE_URL / 验证码 AppId 兜底
 ```
 
 - 房间页二维码内容展示带 `expire_at` 倒计时，到期自动隐藏（与后端"消失"语义一致）；
-- 建房表单包含：房间名、可选密码、可选消息有效期（≤1h，默认 1h）、可选课程关联信息五字段。
+- 建房表单包含：房间名、可选密码、可选消息有效期（≤1h，默认 1h）、可选生命周期（分钟/永久）、可选课程关联信息五字段；
+- 开发环境由 Vite proxy 转发 `/api` 与 `/ws`（`ws: true`）到后端 3000 端口。
 
 ---
 
