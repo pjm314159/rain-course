@@ -45,7 +45,7 @@ all = { level = "deny", priority = -1 }
 unwrap_used = "deny"
 await_holding_lock = "deny"
 
-# 2核2G 服务器部署：最小体积 + 最大运行时优化
+# release 最优 profile：最小体积 + 最佳运行时（本项目在 2 核 2G 机器上开发验证）
 [profile.release]
 opt-level = 3
 lto = "fat"            # 全程序链接时优化

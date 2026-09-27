@@ -26,12 +26,30 @@
   - 扫码相机 `BarcodeDetector` 原生路径按 `FRAME_INTERVAL_MS`（300ms）节流，此前走 `requestAnimationFrame` 每帧都执行 `detect`，白耗 CPU/GPU（jsQR 路径原本已节流）
   - 房间消息 store 在入队时惰性裁剪已过期二维码消息，使数组有界（对齐后端 `VecDeque` 的惰性淘汰），长会话不再无界增长
   - 后端 WS：连接进房后退订 lobby 广播、回广场时重新订阅，使广场全量 `plaza_update` 只发给广场页连接；`broadcast_plaza` 在无 lobby 订阅者时提前返回；`share_qr` 内容分配由 3 次降为 2 次
+- 房间邀请短链：设置面板生成 `{origin}/r/{房间号}` 一键复制；新增 `/r/:roomId` 落地路由（打开即申请加入，密码房弹密码框，joined 后自动进房间页）；广场「加入房间」对话框同时接受纯数字房间号或粘贴的短链 URL
+- 房间页改为 `qrcode_share` ChannelPage 式全屏布局：顶栏左「返回」、正中房间名（大字）+ 房号（小字）、右「设置」；中间为接收的签到码消息流（自动滚动）；底栏「扫码分享」（主位）+「分享房间」图标按钮；房间页路由统一为 `/r/{房间号}`（`/room` 已移除，刷新不丢房间）
+- 房间页扫码改为**全屏取景**：左上角关闭、左下角相册（选图后浏览器本地 `jsQR` 识别，识别成功即推送全房间并关闭）；底栏原「粘贴推送」按钮移除，改为右侧「分享房间」——优先 `navigator.share` 系统分享，不支持或失败则复制邀请短链并 toast 提示
+- 设置抽屉（房间页右上角）：房间信息（房号/房间名/课程信息 + 一键复制）、成员列表、「收到消息立即签到」开关（localStorage 持久化，**默认关**——关闭时点击消息内容框才签到）、离开房间/关闭房间（房主）
+- `qr_update` 改为**也回显给发送者**（前端按 raw+expire_at 去重）：签到协作场景下发送者本人同样要在消息流里看到自己分享的码
+- 视觉样式复刻 `qrcode_share` 项目：前端引入 Tailwind CSS v4（`@theme` 设计令牌：奶油画布/墨色文字/品牌色板/Inter 字体），重刷导航与登录/扫码/房间/广场全部页面；房间内头部大号展示数字房间号（一键复制）
+- 房间名改为**必填**（后端空名校验 40306 + 前端必填标记）；`joined` 帧下发房间名，加入者可见
+- WS 连接 open 前到达的消息排队、open 后按序补发（与自动 rejoin 去重），修复"创建房间后偶发未自动进入房间"的竞态
+- 本站会话对齐雨课堂 `sessionid` 有效期：**14 天滑动续期**（已抓包确认 `sessionid` 14 天、`csrftoken` 1 年），签名 cookie 校验，无服务端会话存储
+- 会话方案从 tower-sessions → 签名 cookie（`axum-extra` `PrivateCookieJar`）
+- 存储决策：不引入数据库与 Redis，全部状态内存态；雨课堂凭证内存保存，服务重启需重新登录
+- 登录方式：短信验证码登录与微信扫码登录从"预留"改为**必做**；微信扫码登录直接复用雨课堂 `pre-info` 返回的二维码图片（无需本站公众号）；**实测确认**短信/密码登录必须携带腾讯验证码票据（空票据被拒），前端接入 TJCaptcha.js（AppId 复用雨课堂 `2091064951`，本站仅透传票据）
+- `scripts/test_yk_login.py`：雨课堂登录接口实测脚本（短信/密码/扫码、cookie 过期时间打印）；`scripts/captcha.html`：本地获取验证码票据的 demo 页
+- 实测确认验证码 AppId `2091064951` **不限域名**——任意域名/本地开发均可弹验证码，登录模块零外部资质依赖
+- 分享房间资源上限：全局房间 ≤ 100、每用户建房 ≤ **5**、单房间 ≤ 50 人、消息 ≤ 2KB、≤ 30 条/分钟、历史消息 ≤ **100 条/频道**、广播 channel 有界
+- 房主策略改为**类微信**：房主退出/断线不解散房间，身份保留，重连自动恢复
+- 客户端连接模型：单客户端单 WebSocket（SharedWorker 多标签页复用，BroadcastChannel 分发），心跳改为**客户端 30s pong** 保活
+- 历史消息：每频道 FIFO 队列上限 100 条（淘汰最旧），消息过期**直接删除**（入队时惰性淘汰，不引入定时清理任务——内存上界已由队列上限确定，最坏 ≈ 5MB）
 
 ### Added
-- Docker Compose 一键部署（M6，见 `docs/DESIGN.md` §8）：`backend/Dockerfile`（多阶段 `rust:1-bookworm` → `debian:bookworm-slim`，先用假入口把依赖编出来以复用层缓存、非 root uid 10001 运行、装 `curl` 供 healthcheck）、`frontend/Dockerfile`（多阶段 `node:24-bookworm-slim` → `nginx:stable-alpine`，`VITE_*` 经 `build.args` 注入）、根 `docker-compose.yml`（只对外暴露 80、TLS 交前置反代；backend 不映射端口且 frontend 以 `service_healthy` 依赖它；`mem_limit` 512m/128m 对齐 2 核 2G 预算；日志命名卷 `logs` 持久化）与两端 `.dockerignore`
+- Docker Compose 一键部署（M6，见 `docs/DESIGN.md` §8）：`backend/Dockerfile`（多阶段 `rust:1-bookworm` → `debian:bookworm-slim`，先用假入口把依赖编出来以复用层缓存、非 root uid 10001 运行、装 `curl` 供 healthcheck）、`frontend/Dockerfile`（多阶段 `node:24-bookworm-slim` → `nginx:stable-alpine`，`VITE_*` 经 `build.args` 注入）、根 `docker-compose.yml`（只对外暴露 80、TLS 交前置反代；backend 不映射端口且 frontend 以 `service_healthy` 依赖它；`mem_limit` 512m/128m 按开发验证所用的 2 核 2G 机器设定，仅作防单容器耗尽宿主的安全护栏；日志命名卷 `logs` 持久化）与两端 `.dockerignore`
 - 前端网关 `frontend/nginx.conf`：`/api` 反代读超时 120s（覆盖微信扫码登录的 30s 服务端长轮询）、`/ws` 透传 `Upgrade`/`Connection` 且读超时 300s、显式 `gzip_types` + `gzip_vary` + `gzip_static`、`/assets/` 长缓存 `immutable` 而 `index.html` 强制 `no-cache`、SPA `try_files ... /index.html`；末尾附「容器内终结 TLS」注释模板
 - 前端构建期 gzip 预压缩：接入 `vite-plugin-compression2`，构建产出 `.gz`（index.js 325KB → 101KB、css 31KB → 6KB）配合 nginx `gzip_static` 直出，省去运行时压缩 CPU
-- 根 `.env.example` 补充 Docker 部署用法说明与前端构建期变量（`VITE_*`）——compose 部署下该文件同时承担容器环境变量注入与 `build.args` 取值两个角色；`README.md` 新增「部署（Docker Compose）」章节（部署命令、端口/TLS、2G 机器 swap 建议、升级流程）
+- 根 `.env.example` 补充 Docker 部署用法说明与前端构建期变量（`VITE_*`）——compose 部署下该文件同时承担容器环境变量注入与 `build.args` 取值两个角色；`README.md` 重写为**用户侧文档**（功能一览、使用流程、Docker Compose 部署、配置项速查、已知限制；2 核 2G 只表述为我们的开发验证环境，不作为部署基线）
 - 微信 JS-SDK 可用性预检查（M5）：后端 `GET /api/wechat/status`（免会话）返回 `{available, reason}`，只暴露「是否已配置」不含凭证；前端房间页仅在「微信内 且 后端判定可用」时才渲染「微信扫一扫」入口，未配置时完全不显示（避免点击后才报 40307）
 - 微信真机调试开关（M5）：`frontend/.env` 设 `VITE_WX_DEBUG=true` 时 `wx.config({debug:true})`，在微信真机上以 alert 弹窗输出签名校验细节，便于定位 `invalid signature`（默认关闭，上线留空）
 - 微信 JS-SDK 扫码签到（M5）后端 `backend/src/wechat/`：`GET /api/wechat/jssdk-signature?url=` 返回 `{appId,timestamp,nonceStr,signature}`；`WechatClient` 内存缓存 `access_token` / `jsapi_ticket`（默认 7200s，提前 300s 刷新；`tokio::sync::RwLock` 保证不跨 `await` 持锁），签名串 `jsapi_ticket=..&noncestr=..&timestamp=..&url=..` 取 **plain SHA1**（新增 `sha1` 依赖），`url` 自动去除 `#` 及其后部分；公众号凭证经 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 注入，未配置时返回 40307（不 panic）
@@ -49,33 +67,13 @@
 - `.github/pull_request_template.md`：PR 模板（含自查清单）
 - `.github/workflows/ci.yml`：CI 流程（后端 fmt/clippy/test，前端 lint/typecheck/test/build）
 - 房间生命周期：可自定义（精确到分钟）、允许永久；任何房间 14 天无消息自动删除
-- 房间消息全保留（存量上限 200 条/房间），以有效期控制可见性
+- 房间消息全保留（存量上限 100 条/房间，与后端配置一致），以有效期控制可见性
 - Git 主分支使用 `main`，集成分支使用 `dev`；远程仓库 `github.com/pjm314159/rain-course`（origin）
 - 前端包管理器使用 pnpm（CI 同步使用 `pnpm install --frozen-lockfile`）
 - 前端脚手架（Vite + React 19 + TS + React Compiler + oxlint），已清除模板代码并填入项目信息（name/author/描述），新增 `typecheck`/`test` 脚本
 - 扫码页支持上传二维码图片识别签到：浏览器本地解码（`BarcodeDetector` 优先、`jsQR` 降级），图片不上传服务器；单图 ≤ 5MB，识别失败明确提示
 - 后端 `Cargo.toml`：填入项目信息（`rain-course-backend` 0.1.0 / author / 描述），配置 `[lints]`（forbid unsafe、deny unwrap_used 等）与 release 最优 profile（lto=fat、codegen-units=1、panic=abort、strip）；后端暂不引入框架依赖
 - 许可证：全项目使用 GPL-3.0-or-later（LICENSE 为官方全文），`rust-version` 对齐本机 rustc 1.98；创建根 README.md
-
-### Changed
-- 房间邀请短链：设置面板生成 `{origin}/r/{房间号}` 一键复制；新增 `/r/:roomId` 落地路由（打开即申请加入，密码房弹密码框，joined 后自动进房间页）；广场「加入房间」对话框同时接受纯数字房间号或粘贴的短链 URL
-- 房间页改为 `qrcode_share` ChannelPage 式全屏布局：顶栏左「返回」、正中房间名（大字）+ 房号（小字）、右「设置」；中间为接收的签到码消息流（自动滚动）；底栏「扫码分享」（主位）+「分享房间」图标按钮；房间页路由统一为 `/r/{房间号}`（`/room` 已移除，刷新不丢房间）
-- 房间页扫码改为**全屏取景**：左上角关闭、左下角相册（选图后浏览器本地 `jsQR` 识别，识别成功即推送全房间并关闭）；底栏原「粘贴推送」按钮移除，改为右侧「分享房间」——优先 `navigator.share` 系统分享，不支持或失败则复制邀请短链并 toast 提示
-- 设置抽屉（房间页右上角）：房间信息（房号/房间名/课程信息 + 一键复制）、成员列表、「收到消息立即签到」开关（localStorage 持久化，**默认关**——关闭时点击消息内容框才签到）、离开房间/关闭房间（房主）
-- `qr_update` 改为**也回显给发送者**（前端按 raw+expire_at 去重）：签到协作场景下发送者本人同样要在消息流里看到自己分享的码
-- 视觉样式复刻 `qrcode_share` 项目：前端引入 Tailwind CSS v4（`@theme` 设计令牌：奶油画布/墨色文字/品牌色板/Inter 字体），重刷导航与登录/扫码/房间/广场全部页面；房间内头部大号展示数字房间号（一键复制）
-- 房间名改为**必填**（后端空名校验 40306 + 前端必填标记）；`joined` 帧下发房间名，加入者可见
-- WS 连接 open 前到达的消息排队、open 后按序补发（与自动 rejoin 去重），修复"创建房间后偶发未自动进入房间"的竞态
-- 本站会话对齐雨课堂 `sessionid` 有效期：**14 天滑动续期**（已抓包确认 `sessionid` 14 天、`csrftoken` 1 年），签名 cookie 校验，无服务端会话存储
-- 会话方案从 tower-sessions → 签名 cookie（`axum-extra` `PrivateCookieJar`）
-- 存储决策：不引入数据库与 Redis，全部状态内存态；雨课堂凭证内存保存，服务重启需重新登录
-- 登录方式：短信验证码登录与微信扫码登录从"预留"改为**必做**；微信扫码登录直接复用雨课堂 `pre-info` 返回的二维码图片（无需本站公众号）；**实测确认**短信/密码登录必须携带腾讯验证码票据（空票据被拒），前端接入 TJCaptcha.js（AppId 复用雨课堂 `2091064951`，本站仅透传票据）
-- `scripts/test_yk_login.py`：雨课堂登录接口实测脚本（短信/密码/扫码、cookie 过期时间打印）；`scripts/captcha.html`：本地获取验证码票据的 demo 页
-- 实测确认验证码 AppId `2091064951` **不限域名**——任意域名/本地开发均可弹验证码，登录模块零外部资质依赖
-- 分享房间资源上限：全局房间 ≤ 100、每用户建房 ≤ **5**、单房间 ≤ 50 人、消息 ≤ 2KB、≤ 30 条/分钟、历史消息 ≤ **100 条/天/频道**、广播 channel 有界
-- 房主策略改为**类微信**：房主退出/断线不解散房间，身份保留，重连自动恢复
-- 客户端连接模型：单客户端单 WebSocket（SharedWorker 多标签页复用，BroadcastChannel 分发），心跳改为**客户端 30s pong** 保活
-- 历史消息：每频道 FIFO 队列上限 100 条（淘汰最旧），消息过期**直接删除**（入队时惰性淘汰，不引入定时清理任务——内存上界已由队列上限确定，最坏 ≈ 5MB）
 
 ### Removed
 - 旧版 `docs/需求文档.md`（拆分为 SPEC.md 与 DESIGN.md）
