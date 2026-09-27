@@ -12,6 +12,7 @@ import { closeRoom } from '../api/room'
 import { submitSign } from '../api/sign'
 import { decodeQrFromImage, startQrScan, type ScannerHandle } from '../lib/qr-scan'
 import { inviteLink } from '../lib/room-link'
+import { isYuketangSignUrl } from '../lib/sign-url'
 import { useNow } from '../lib/use-now'
 import { useAuth } from '../stores/auth'
 import { useRoom } from '../stores/room'
@@ -258,8 +259,8 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
       }`}
     >
       <span
-        className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-          checked ? 'translate-x-[22px]' : 'translate-x-0.5'
+        className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+          checked ? 'translate-x-5' : ''
         }`}
       />
     </button>
@@ -444,23 +445,33 @@ function pushQr(raw: string) {
   getWs().send({ type: 'share_qr', room, raw })
 }
 
+/** 识别到的内容推送到房间前的预校验提示（与后端 share_qr 拒绝文案一致） */
+const INVALID_QR_TEXT = '不是有效的雨课堂签到码'
+
 /** 全屏扫码分享：取景铺满，左上角关闭、左下角相册（本地识别图片，不上传服务器） */
-function ScanOverlay({ onClose }: { onClose: () => void }) {
+function ScanOverlay({ onClose, onPushed }: { onClose: () => void; onPushed: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const [decoding, setDecoding] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // 相机取景：检到第一个二维码即推送全房间并关闭
+  // 相机取景：识别到内容先本地预校验——有效则推送全房间并关闭（返回 true 停扫）；
+  // 无效则提示并继续扫描（返回 false），绝不把非签到码推给全房间
   useEffect(() => {
     if (!videoRef.current) return
     let cancelled = false
     let handle: ScannerHandle | null = null
     startQrScan(videoRef.current, (text) => {
       const raw = text.trim()
-      if (!raw) return
+      if (raw === '') return false
+      if (!isYuketangSignUrl(raw)) {
+        setError(INVALID_QR_TEXT)
+        return false
+      }
       pushQr(raw)
+      onPushed()
       onClose()
+      return true
     })
       .then((h) => {
         if (cancelled) h.stop()
@@ -473,7 +484,7 @@ function ScanOverlay({ onClose }: { onClose: () => void }) {
       cancelled = true
       handle?.stop()
     }
-  }, [onClose])
+  }, [onClose, onPushed])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -483,7 +494,7 @@ function ScanOverlay({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  /** 相册：选图后本地解码，识别即推送（图片不离开浏览器） */
+  /** 相册：选图后本地解码 + 预校验，有效即推送（图片不离开浏览器） */
   async function pickImage(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     e.target.value = '' // 允许重复选择同一文件
@@ -491,7 +502,13 @@ function ScanOverlay({ onClose }: { onClose: () => void }) {
     setDecoding(true)
     setError(null)
     try {
-      pushQr(await decodeQrFromImage(file))
+      const text = await decodeQrFromImage(file)
+      if (!isYuketangSignUrl(text)) {
+        setError(INVALID_QR_TEXT)
+        return
+      }
+      pushQr(text)
+      onPushed()
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : '图片识别失败')
@@ -590,6 +607,13 @@ function InRoomView() {
     const t = setTimeout(() => setToast(null), 2000)
     return () => clearTimeout(t)
   }, [toast])
+
+  // 服务端错误帧兜底提示（如分享内容被安全校验拒绝、频率超限）——双保险：正常路径已被本地预校验拦截
+  useEffect(() => {
+    return useRoom.subscribe((s, prev) => {
+      if (s.lastError !== null && s.lastError !== prev.lastError) setToast(s.lastError.msg)
+    })
+  }, [])
 
   /** 分享房间：优先系统分享面板，不支持或失败则复制邀请短链 */
   async function shareRoom() {
@@ -695,7 +719,9 @@ function InRoomView() {
           onClose={() => setShowSettings(false)}
         />
       )}
-      {scanning && <ScanOverlay onClose={() => setScanning(false)} />}
+      {scanning && (
+        <ScanOverlay onClose={() => setScanning(false)} onPushed={() => setToast('已推送到房间')} />
+      )}
     </>
   )
 }

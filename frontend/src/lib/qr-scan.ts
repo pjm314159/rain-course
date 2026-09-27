@@ -1,6 +1,6 @@
-/// 扫码引擎：相机 BarcodeDetector 优先、@zxing/browser 降级；图片 BarcodeDetector 优先、jsQR 兜底
-/// （zxing 静态图解码实测对整数倍缩放的二维码会失败，故图片路径用 jsQR，docs/SPEC.md §3.2.2）
-export type ScanEngine = 'native' | 'zxing'
+/// 扫码引擎：BarcodeDetector 优先；不支持时统一用 jsQR（相机逐帧 / 图片画布解码）
+/// （曾用 @zxing/browser 兜底：静态图与视频流解码实测对整数倍缩放的二维码漏检，已移除，docs/SPEC.md §3.2.2）
+export type ScanEngine = 'native' | 'jsqr'
 
 interface NativeDetector {
   // 运行时接受任意 ImageBitmapSource（img/video/canvas），DOM lib 类型过窄故自行声明
@@ -14,7 +14,7 @@ declare global {
 }
 
 export function scanEngine(): ScanEngine {
-  return typeof window !== 'undefined' && 'BarcodeDetector' in window ? 'native' : 'zxing'
+  return typeof window !== 'undefined' && 'BarcodeDetector' in window ? 'native' : 'jsqr'
 }
 
 export interface ScannerHandle {
@@ -67,15 +67,30 @@ async function decodeByJsQr(img: HTMLImageElement): Promise<string> {
   return jsQR(data, canvas.width, canvas.height)?.data ?? ''
 }
 
-/** 打开相机并持续识别二维码，检到第一个结果后回调并自动停止 */
+/** 相机帧解码前的最大边长：大分辨率帧先等比缩小，控制每帧解码耗时 */
+const CAMERA_DECODE_EDGE = 1280
+
+/** 每帧解码间隔（ms）：识别失败/内容被拒时继续下一帧 */
+const FRAME_INTERVAL_MS = 300
+
+/**
+ * 打开相机并持续识别二维码。
+ * onDetected 返回 true 表示接受该结果并停止扫描；返回 false 则忽略该内容、继续扫下一帧
+ * （例如内容不是雨课堂签到码时，调用方给出提示但不中断扫码）。
+ */
 export async function startQrScan(
   video: HTMLVideoElement,
-  onDetected: (text: string) => void,
+  onDetected: (text: string) => boolean,
 ): Promise<ScannerHandle> {
   const stream = await openCamera(video)
-  return scanEngine() === 'native'
-    ? startNative(stream, video, onDetected)
-    : startZxing(stream, video, onDetected)
+  try {
+    return scanEngine() === 'native'
+      ? await startNative(stream, video, onDetected)
+      : await startJsQr(stream, video, onDetected)
+  } catch (e) {
+    stopStream(stream)
+    throw e
+  }
 }
 
 async function openCamera(video: HTMLVideoElement): Promise<MediaStream> {
@@ -95,7 +110,7 @@ function stopStream(stream: MediaStream) {
 async function startNative(
   stream: MediaStream,
   video: HTMLVideoElement,
-  onDetected: (text: string) => void,
+  onDetected: (text: string) => boolean,
 ): Promise<ScannerHandle> {
   const detector = new window.BarcodeDetector!({ formats: ['qr_code'] })
   let stopped = false
@@ -105,9 +120,8 @@ async function startNative(
     try {
       const codes = await detector.detect(video)
       const first = codes.find((c) => c.rawValue)
-      if (first) {
+      if (first && onDetected(first.rawValue)) {
         stop()
-        onDetected(first.rawValue)
         return
       }
     } catch {
@@ -128,25 +142,39 @@ async function startNative(
   }
 }
 
-async function startZxing(
+/** jsQR 逐帧解码：定时把视频帧画到画布上取 ImageData 识别（纯 JS，对缩放/旋转/亮度稳健） */
+async function startJsQr(
   stream: MediaStream,
   video: HTMLVideoElement,
-  onDetected: (text: string) => void,
+  onDetected: (text: string) => boolean,
 ): Promise<ScannerHandle> {
-  const { BrowserMultiFormatReader } = await import('@zxing/browser')
-  const reader = new BrowserMultiFormatReader()
+  const { default: jsQR } = await import('jsqr')
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (ctx === null) throw new Error('无法创建画布上下文')
   let stopped = false
-  const controls = await reader.decodeFromStream(stream, video, (result) => {
-    if (result && !stopped) {
-      stopped = true
-      controls.stop()
-      onDetected(result.getText())
+  let timer = 0
+  const tick = () => {
+    if (stopped) return
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0) {
+      const scale = Math.min(1, CAMERA_DECODE_EDGE / Math.max(video.videoWidth, video.videoHeight))
+      canvas.width = Math.max(1, Math.round(video.videoWidth * scale))
+      canvas.height = Math.max(1, Math.round(video.videoHeight * scale))
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      const frame = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      const code = jsQR(frame.data, canvas.width, canvas.height)
+      if (code !== null && code.data !== '' && onDetected(code.data)) {
+        stop()
+        return
+      }
     }
-  })
-  return {
-    stop: () => {
-      stopped = true
-      controls.stop()
-    },
+    timer = setTimeout(tick, FRAME_INTERVAL_MS)
   }
+  function stop() {
+    stopped = true
+    clearTimeout(timer)
+    stopStream(stream)
+  }
+  tick()
+  return { stop }
 }
