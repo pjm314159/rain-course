@@ -9,6 +9,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
+use crate::ws::models::error_code;
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     /// 未登录或本站会话过期
@@ -26,6 +28,21 @@ pub enum AppError {
     /// 上游雨课堂返回的业务错误（携带其原始 code 与 msg）
     #[error("雨课堂错误 {upstream_code}: {message}")]
     Upstream { upstream_code: i64, message: String },
+    /// 全局房间数已达上限（docs/SPEC.md §3.3.3）
+    #[error("站点房间数已达上限，请稍后再试")]
+    RoomLimitReached,
+    /// 每用户建房数已达上限
+    #[error("你创建的房间数已达上限")]
+    RoomPerUserLimitReached,
+    /// 房间不存在或已关闭/过期
+    #[error("房间不存在或已关闭")]
+    RoomNotFound,
+    /// 非房主执行房主操作
+    #[error("仅房主可执行该操作")]
+    NotRoomOwner,
+    /// 房间入参非法（字段超长等）
+    #[error("{0}")]
+    BadRoomInput(&'static str),
     /// 其他内部错误
     #[error("内部错误")]
     Internal(#[from] anyhow::Error),
@@ -40,6 +57,11 @@ impl AppError {
             AppError::InvalidQrContent => 40301,
             AppError::QrExpired => 51203,
             AppError::Upstream { upstream_code, .. } => 50000 + upstream_code.unsigned_abs() as i64,
+            AppError::RoomLimitReached => error_code::ROOMS_TOTAL_LIMIT,
+            AppError::RoomPerUserLimitReached => error_code::ROOMS_PER_USER_LIMIT,
+            AppError::RoomNotFound => error_code::ROOM_NOT_FOUND,
+            AppError::NotRoomOwner => error_code::NOT_ROOM_OWNER,
+            AppError::BadRoomInput(_) => error_code::BAD_REQUEST,
             AppError::Internal(_) => 50000,
         }
     }

@@ -12,6 +12,12 @@ const TABS: Array<{ key: Tab; label: string }> = [
   { key: 'qrcode', label: '扫码登录' },
 ]
 
+// 视觉样式常量（参照 qrcode_share 的 Input/Button 设计令牌）
+const inputCls =
+  'w-full rounded-md border border-hairline bg-canvas px-4 py-3 text-sm text-ink transition-colors duration-150 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/20'
+const btnPrimaryCls =
+  'inline-flex w-full items-center justify-center rounded-md bg-ink px-5 py-3 text-sm font-semibold text-on-primary transition-colors duration-150 hover:bg-ink-active focus:outline-none focus:ring-2 focus:ring-ink/30 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
+
 export default function Login() {
   const navigate = useNavigate()
   const setUserId = useAuth((s) => s.setUserId)
@@ -122,15 +128,17 @@ export default function Login() {
   }
 
   return (
-    <main className="page login">
-      <h1>雨课堂签到助手</h1>
-      <div className="tabs" role="tablist">
+    <main className="mx-auto flex min-h-screen w-full max-w-sm flex-col justify-center px-4 py-12">
+      <h1 className="text-center text-2xl font-bold text-ink">雨课堂签到助手</h1>
+      <div className="mt-6 flex gap-1 rounded-full bg-surface-card p-1" role="tablist">
         {TABS.map((t) => (
           <button
             key={t.key}
             role="tab"
             aria-selected={tab === t.key}
-            className={tab === t.key ? 'active' : ''}
+            className={`flex-1 rounded-full px-3 py-2 text-sm font-medium transition-colors ${
+              tab === t.key ? 'bg-ink text-on-primary' : 'text-muted hover:text-ink'
+            }`}
             onClick={() => setTab(t.key)}
           >
             {t.label}
@@ -138,27 +146,30 @@ export default function Login() {
         ))}
       </div>
 
-      {error && <p className="error">{error}</p>}
+      {error && <p className="mt-4 rounded-md bg-error/10 p-3 text-sm text-error">{error}</p>}
 
       {tab === 'password' && (
         <form
+          className="mt-6 space-y-3"
           onSubmit={(e) => {
             e.preventDefault()
             void handlePasswordLogin()
           }}
         >
           <input
+            className={inputCls}
             placeholder="手机号或邮箱"
             value={account}
             onChange={(e) => setAccount(e.target.value)}
           />
           <input
+            className={inputCls}
             type="password"
             placeholder="密码"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
-          <button type="submit" disabled={busy || !account || !password}>
+          <button type="submit" disabled={busy || !account || !password} className={btnPrimaryCls}>
             {busy ? '登录中…' : '登录'}
           </button>
         </form>
@@ -166,37 +177,49 @@ export default function Login() {
 
       {tab === 'sms' && (
         <form
+          className="mt-6 space-y-3"
           onSubmit={(e) => {
             e.preventDefault()
             void handleSmsLogin()
           }}
         >
-          <input placeholder="手机号" value={phone} onChange={(e) => setPhone(e.target.value)} />
-          <div className="row">
+          <input
+            className={inputCls}
+            placeholder="手机号"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+          />
+          <div className="flex gap-2">
             <input
+              className={inputCls + ' min-w-0 flex-1'}
               placeholder="短信验证码"
               value={smsCode}
               inputMode="numeric"
               onChange={(e) => setSmsCode(e.target.value)}
             />
-            <button type="button" disabled={busy || countdown > 0 || !phone} onClick={() => void handleSendSms()}>
+            <button
+              type="button"
+              disabled={busy || countdown > 0 || !phone}
+              onClick={() => void handleSendSms()}
+              className="shrink-0 rounded-md border border-hairline bg-canvas px-4 py-3 text-sm font-medium text-ink transition-colors hover:bg-surface-soft disabled:cursor-not-allowed disabled:opacity-50"
+            >
               {countdown > 0 ? `${countdown}s` : '发送验证码'}
             </button>
           </div>
-          <button type="submit" disabled={busy || !phone || !smsCode}>
+          <button type="submit" disabled={busy || !phone || !smsCode} className={btnPrimaryCls}>
             {busy ? '登录中…' : '登录'}
           </button>
         </form>
       )}
 
       {tab === 'qrcode' && (
-        <div className="qrcode">
+        <div className="mt-6 flex flex-col items-center gap-3 rounded-lg border border-hairline bg-canvas p-6">
           {qrImage ? (
-            <img src={qrImage} alt="微信扫码登录二维码" width={220} />
+            <img src={qrImage} alt="微信扫码登录二维码" width={220} className="rounded-lg" />
           ) : (
-            <p>二维码加载中…</p>
+            <p className="text-sm text-muted">二维码加载中…</p>
           )}
-          <p>请用微信扫码，二维码过期会自动刷新</p>
+          <p className="text-sm text-muted">请用微信扫码，二维码过期会自动刷新</p>
         </div>
       )}
     </main>
