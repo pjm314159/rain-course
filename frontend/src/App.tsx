@@ -6,6 +6,7 @@ import { getWs } from './ws/client'
 import Login from './pages/Login'
 import Room from './pages/Room'
 import Plaza from './pages/Plaza'
+import Courses from './pages/Courses'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const userId = useAuth((s) => s.userId)
@@ -31,8 +32,11 @@ function HomeWithNav() {
       <header className="sticky top-0 z-10 border-b border-hairline bg-canvas/80 backdrop-blur-sm">
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
           <nav className="flex items-center gap-1">
-            <NavLink to="/" className={({ isActive }) => navLinkCls(isActive)}>
+            <NavLink to="/" end className={({ isActive }) => navLinkCls(isActive)}>
               广场
+            </NavLink>
+            <NavLink to="/courses" className={({ isActive }) => navLinkCls(isActive)}>
+              当前课程
             </NavLink>
           </nav>
           <button
@@ -52,6 +56,7 @@ function HomeWithNav() {
       </header>
       <Routes>
         <Route path="/" element={<Plaza />} />
+        <Route path="/courses" element={<Courses />} />
       </Routes>
     </div>
   )

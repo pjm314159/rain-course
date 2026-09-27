@@ -5,6 +5,7 @@
 
 mod auth;
 mod config;
+mod courses;
 mod error;
 mod signin;
 mod ws;
@@ -43,6 +44,7 @@ fn build_app(cfg: Arc<Config>) -> Router {
         .with_state(cfg);
     auth::routes::router(state.clone())
         .merge(signin::routes::router(state.clone()))
+        .merge(courses::routes::router(state.clone()))
         .merge(ws::routes::router(state))
         .merge(health)
 }
