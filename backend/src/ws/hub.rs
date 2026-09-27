@@ -366,7 +366,12 @@ impl Hub {
     }
 
     /// 向 lobby 连接广播广场全量列表
+    /// （房间内连接进房后会退订 lobby，故此处的接收者数即 lobby 在线数）
     pub fn broadcast_plaza(&self) {
+        // 无 lobby 订阅者（所有人都在房间内 / 无人在线）时无需构建全量列表
+        if self.lobby_tx.receiver_count() == 0 {
+            return;
+        }
         let msg = ServerMsg::PlazaUpdate {
             rooms: self.plaza(),
         };
@@ -483,7 +488,8 @@ impl Hub {
 
     /// 扫码者推送二维码（docs/DESIGN.md §4.2 share_qr）。
     /// 内容合法性（白名单 URL）由路由层先行校验，Hub 仅做成员与长度检查。
-    pub fn share_qr(&self, conn_id: ConnId, raw: &str, now: Now) -> Result<ServerMsg, WsError> {
+    /// 返回 `()`：广播内容由 `room.tx` 下发，调用方无需再持有一份拷贝。
+    pub fn share_qr(&self, conn_id: ConnId, raw: &str, now: Now) -> Result<(), WsError> {
         let mut g = self.inner.lock().expect("hub lock");
         let Some(conn) = g.conns.get(&conn_id) else {
             return Err(WsError::new(error_code::BAD_REQUEST, "连接不存在"));
@@ -500,9 +506,11 @@ impl Hub {
             .get_mut(&room_id)
             .expect("conn.room points to live room");
         let expire_unix_ms = now.unix_ms + room.qr_ttl.as_millis() as u64;
+        // 内容只分配两份：一份留存房间历史，一份随广播下发（此前为 3 次分配）
+        let stored = raw.to_string();
         room.push_msg(
             QrMsg {
-                raw: raw.to_string(),
+                raw: stored.clone(),
                 by: user_id,
                 expire_at: now.instant + room.qr_ttl,
                 expire_unix_ms,
@@ -511,14 +519,13 @@ impl Hub {
             now,
         );
         room.last_activity = now.instant;
-        let msg = ServerMsg::QrUpdate {
+        let _ = room.tx.send(ServerMsg::QrUpdate {
             room: room_id,
-            raw: raw.to_string(),
+            raw: stored,
             by: user_id,
             expire_at: expire_unix_ms,
-        };
-        let _ = room.tx.send(msg.clone());
-        Ok(msg)
+        });
+        Ok(())
     }
 
     /// 成员签到回执（docs/DESIGN.md §4.2 sign_result），广播给全房间
@@ -926,16 +933,18 @@ mod tests {
             .unwrap();
         // 上限：3600s 后过期；下限：1s 后过期
         hub.join(a.id, id_big, None, now_at(t, ms));
-        let msg = hub.share_qr(a.id, URL, now_at(t, ms)).unwrap();
-        match msg {
+        let mut big_rx = hub.subscribe_room(id_big).unwrap();
+        hub.share_qr(a.id, URL, now_at(t, ms)).unwrap();
+        match big_rx.try_recv().unwrap() {
             ServerMsg::QrUpdate { expire_at, .. } => {
                 assert_eq!(expire_at, ms + 3_600_000)
             }
             other => panic!("{other:?}"),
         }
         hub.join(a.id, id_zero, None, now_at(t, ms));
-        let msg = hub.share_qr(a.id, URL, now_at(t, ms)).unwrap();
-        match msg {
+        let mut zero_rx = hub.subscribe_room(id_zero).unwrap();
+        hub.share_qr(a.id, URL, now_at(t, ms)).unwrap();
+        match zero_rx.try_recv().unwrap() {
             ServerMsg::QrUpdate { expire_at, .. } => assert_eq!(expire_at, ms + 1_000),
             other => panic!("{other:?}"),
         }
@@ -1198,8 +1207,8 @@ mod tests {
             .unwrap();
         hub.join(a.id, id, None, now_at(t, ms));
         let mut room_rx = hub.subscribe_room(id).unwrap();
-        let msg = hub.share_qr(a.id, URL, now_at(t, ms)).unwrap();
-        match msg {
+        hub.share_qr(a.id, URL, now_at(t, ms)).unwrap();
+        match room_rx.try_recv().unwrap() {
             ServerMsg::QrUpdate {
                 room,
                 raw,
@@ -1211,10 +1220,6 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        assert!(matches!(
-            room_rx.try_recv().unwrap(),
-            ServerMsg::QrUpdate { .. }
-        ));
 
         // 新成员加入收到未过期历史消息
         let b = mk_conn(&hub, 2, t, ms);
@@ -1307,13 +1312,13 @@ mod tests {
         // 未加入房间
         match hub.share_qr(a.id, URL, now_at(t, ms)) {
             Err(e) => assert_eq!(e.code, error_code::NOT_IN_ROOM),
-            Ok(m) => panic!("{m:?}"),
+            Ok(()) => panic!("unexpected ok when not in room"),
         }
         hub.join(a.id, id, None, now_at(t, ms));
         // 超长
         match hub.share_qr(a.id, &"x".repeat(33), now_at(t, ms)) {
             Err(e) => assert_eq!(e.code, error_code::MSG_TOO_LARGE),
-            Ok(m) => panic!("{m:?}"),
+            Ok(()) => panic!("unexpected ok for oversized raw"),
         }
     }
 

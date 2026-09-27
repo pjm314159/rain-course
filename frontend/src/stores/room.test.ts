@@ -65,11 +65,27 @@ describe('applyFrameToState', () => {
   it('qr_update 追加新消息并对相同内容去重', () => {
     const st = baseState()
     const f = fr({ type: 'qr_update', room: 7, raw: 'r1', by: 2, expire_at: 100 })
-    expect(applyFrameToState(st, f).messages).toEqual([{ raw: 'r1', by: 2, expire_at: 100 }])
+    expect(applyFrameToState(st, f, 0).messages).toEqual([{ raw: 'r1', by: 2, expire_at: 100 }])
 
     const withOne: RoomState = { ...st, messages: [{ raw: 'r1', by: 2, expire_at: 100 }] }
-    expect(applyFrameToState(withOne, f).messages).toHaveLength(1)
-    expect(applyFrameToState(withOne, fr({ type: 'qr_update', room: 7, raw: 'r2', by: 2, expire_at: 100 })).messages).toHaveLength(2)
+    // 重复回显且无过期项 → 空补丁（messages 引用不变，避免无谓重渲）
+    expect(applyFrameToState(withOne, f, 0)).toEqual({})
+    expect(applyFrameToState(withOne, fr({ type: 'qr_update', room: 7, raw: 'r2', by: 2, expire_at: 100 }), 0).messages).toHaveLength(2)
+  })
+
+  it('qr_update 入队时惰性裁剪已过期消息', () => {
+    const st: RoomState = {
+      ...baseState(),
+      messages: [
+        { raw: 'old', by: 1, expire_at: 50 },
+        { raw: 'live', by: 2, expire_at: 500 },
+      ],
+    }
+    const out = applyFrameToState(st, fr({ type: 'qr_update', room: 7, raw: 'new', by: 3, expire_at: 900 }), 100)
+    expect(out.messages).toEqual([
+      { raw: 'live', by: 2, expire_at: 500 },
+      { raw: 'new', by: 3, expire_at: 900 },
+    ])
   })
 
   it('sign_result 前插并保留最近 20 条', () => {
