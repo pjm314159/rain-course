@@ -8,6 +8,8 @@
 //! - YK_BASE_URL          雨课堂基地址
 //! - YK_ALLOWED_HOSTS     雨课堂域名白名单（逗号分隔）
 //! - RUST_LOG             日志级别（tracing EnvFilter）
+//! - WECHAT_APP_ID        微信公众号 AppID（M5 微信内扫码；不填则微信内扫码不可用）
+//! - WECHAT_APP_SECRET    微信公众号 AppSecret（同上，不入库）
 //! - WS_*                 房间资源上限（见 [`Limits`]，防 OOM，全部可调）
 
 use std::time::Duration;
@@ -25,6 +27,10 @@ pub struct Config {
     pub limits: Limits,
     /// 日志文件目录（按天滚动）
     pub log_dir: String,
+    /// 微信公众号 AppID（未配置 = 微信内扫码不可用，前端降级相机）
+    pub wechat_app_id: Option<String>,
+    /// 微信公众号 AppSecret（未配置同上；不入库）
+    pub wechat_app_secret: Option<String>,
 }
 
 /// WS 房间资源上限（docs/SPEC.md §3.3.3，全部硬性要求，可经环境变量调整）
@@ -157,6 +163,8 @@ impl Config {
             })),
             limits: Limits::from_lookup(&lookup),
             log_dir: lookup("LOG_DIR").unwrap_or_else(|| "logs".into()),
+            wechat_app_id: optional_env(&lookup, "WECHAT_APP_ID"),
+            wechat_app_secret: optional_env(&lookup, "WECHAT_APP_SECRET"),
         }
     }
 
@@ -170,6 +178,13 @@ impl Config {
             .collect();
         Self::from_lookup(&move |k: &str| map.get(k).cloned())
     }
+}
+
+/// 可选凭证读取：去空白，空串视作未配置
+fn optional_env<F: Fn(&str) -> Option<String>>(lookup: &F, key: &str) -> Option<String> {
+    lookup(key)
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// 解析逗号分隔的域名列表：去空白、去空项、统一小写
@@ -201,6 +216,8 @@ mod tests {
                 "huanghe.yuketang.cn"
             ]
         );
+        assert_eq!(c.wechat_app_id, None);
+        assert_eq!(c.wechat_app_secret, None);
     }
 
     #[test]
@@ -212,6 +229,8 @@ mod tests {
             ("YK_CAPTCHA_APP_ID", "9999"),
             ("YK_BASE_URL", "https://pro.yuketang.cn"),
             ("YK_ALLOWED_HOSTS", "Pro.Yuketang.cn, other.cn"),
+            ("WECHAT_APP_ID", " wx12345 "),
+            ("WECHAT_APP_SECRET", "s3cr3t"),
         ]);
         assert_eq!(c.server_secret, "abc");
         assert_eq!(c.port, 8080);
@@ -219,6 +238,15 @@ mod tests {
         assert_eq!(c.captcha_app_id, "9999");
         assert_eq!(c.yk_base_url, "https://pro.yuketang.cn");
         assert_eq!(c.yk_allowed_hosts, vec!["pro.yuketang.cn", "other.cn"]);
+        assert_eq!(c.wechat_app_id.as_deref(), Some("wx12345"));
+        assert_eq!(c.wechat_app_secret.as_deref(), Some("s3cr3t"));
+    }
+
+    #[test]
+    fn blank_wechat_credentials_treated_as_unset() {
+        let c = Config::from_pairs(&[("WECHAT_APP_ID", "  "), ("WECHAT_APP_SECRET", "")]);
+        assert_eq!(c.wechat_app_id, None);
+        assert_eq!(c.wechat_app_secret, None);
     }
 
     #[test]
