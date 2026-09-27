@@ -50,7 +50,12 @@ function withoutRoom(): Partial<RoomState> {
   }
 }
 
-export function applyFrameToState(state: RoomState, frame: ServerFrame): Partial<RoomState> {
+/** 帧 → 状态补丁。now 用于惰性裁剪已过期二维码消息（默认取当前时间，测试可注入） */
+export function applyFrameToState(
+  state: RoomState,
+  frame: ServerFrame,
+  now: number = Date.now(),
+): Partial<RoomState> {
   switch (frame.type) {
     case 'joined':
       return {
@@ -69,14 +74,19 @@ export function applyFrameToState(state: RoomState, frame: ServerFrame): Partial
     case 'member_leave':
       if (frame.room !== state.room) return {}
       return { owner: frame.owner, members: frame.members }
-    case 'qr_update':
+    case 'qr_update': {
       if (frame.room !== state.room) return {}
       // 发送者也会收到回显；按 raw+expire_at 去重，避免重复追加
-      return {
-        messages: state.messages.some((m) => m.raw === frame.raw && m.expire_at === frame.expire_at)
-          ? state.messages
-          : [...state.messages, { raw: frame.raw, by: frame.by, expire_at: frame.expire_at }],
-      }
+      const duplicated = state.messages.some(
+        (m) => m.raw === frame.raw && m.expire_at === frame.expire_at,
+      )
+      // 入队时惰性淘汰已过期消息，使数组有界（对齐后端 VecDeque 的惰性淘汰）
+      const messages = state.messages.some((m) => m.expire_at <= now)
+        ? state.messages.filter((m) => m.expire_at > now)
+        : state.messages
+      if (duplicated) return messages === state.messages ? {} : { messages }
+      return { messages: [...messages, { raw: frame.raw, by: frame.by, expire_at: frame.expire_at }] }
+    }
     case 'sign_result':
       if (frame.room !== state.room) return {}
       return {
