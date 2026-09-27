@@ -11,6 +11,9 @@
 - 创建房间对话框数值输入框无法删空重输：原 `Number(e.target.value) || 默认值` 使清空（空串 → 0 → falsy）立即回弹为默认值；改为字符串态保存、输入期间不校验不回弹，仅在提交时统一校验
 
 ### Changed
+- 房间页底栏：微信内置浏览器下于相机扫码按钮上方新增「微信扫一扫」主按钮（`docs/SPEC.md` §3.2.2 首选方案），结果与相机扫码同路径（本地预校验 → `share_qr` 推送全房间）；该入口仅在 `GET /api/wechat/status` 判定后端已配置公众号时展示，非微信环境保持相机扫码，签名失败/未注入 wx 时提示回退相机扫码
+- 微信 `wx.scanQRCode` 参数对齐参考实现 `qrcode_share`：`scanType` 由 `['qrCode','barCode']` 收紧为 `['qrCode']`；`fail` 回调 `errMsg` 含 `cancel` 时按用户取消处理（部分微信版本取消走 `fail` 而非 `cancel`），返回 `null` 而非报错
+- `.env.example`：新增 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 占位（M5 微信内扫码；留空则微信内自动降级为相机扫码）
 - `startQrScan` 的 `onDetected` 回调返回值改为 `boolean`：`true` 表示接受结果并停止扫描，`false` 表示内容无效、继续扫描——调用方（`ScanOverlay`）在返回 `false` 时展示错误提示而不中断扫码
 - 广场点击房间卡片「扫描二维码」/「加入房间」对话框提交后不进入房间页：三个加入入口统一等待 `joined` 帧后跳转（此前仅创建路径标记了加入意图）；若目标房间已在房间内则直接进入；取消对话框即清除意图
 - SharedWorker 内引用 `window` 导致静默崩溃、WS 从未建立（页面永远无法进入房间）：`wsUrl()` 与默认定时器改用 `globalThis`（worker 环境无 `window`）；注意 worker 代码更新后需关闭所有引用标签页才会重载
@@ -20,6 +23,10 @@
 - 创建房间对话框「填写课程信息（可选）」折叠开关增加展开箭头：折叠时箭头周期性轻微下沉（`animate-hint-bounce`）提示可展开，展开后旋转 180°
 
 ### Added
+- 微信 JS-SDK 可用性预检查（M5）：后端 `GET /api/wechat/status`（免会话）返回 `{available, reason}`，只暴露「是否已配置」不含凭证；前端房间页仅在「微信内 且 后端判定可用」时才渲染「微信扫一扫」入口，未配置时完全不显示（避免点击后才报 40307）
+- 微信真机调试开关（M5）：`frontend/.env` 设 `VITE_WX_DEBUG=true` 时 `wx.config({debug:true})`，在微信真机上以 alert 弹窗输出签名校验细节，便于定位 `invalid signature`（默认关闭，上线留空）
+- 微信 JS-SDK 扫码签到（M5）后端 `backend/src/wechat/`：`GET /api/wechat/jssdk-signature?url=` 返回 `{appId,timestamp,nonceStr,signature}`；`WechatClient` 内存缓存 `access_token` / `jsapi_ticket`（默认 7200s，提前 300s 刷新；`tokio::sync::RwLock` 保证不跨 `await` 持锁），签名串 `jsapi_ticket=..&noncestr=..&timestamp=..&url=..` 取 **plain SHA1**（新增 `sha1` 依赖），`url` 自动去除 `#` 及其后部分；公众号凭证经 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 注入，未配置时返回 40307（不 panic）
+- 微信 JS-SDK 扫码签到（M5）前端：`frontend/src/lib/wechat.ts`（`MicroMessenger` UA 检测、jweixin 1.6.0 动态注入且幂等复用、`wx.config` → `wx.scanQRCode` 封装，用户取消返回 `null`）与 `frontend/src/api/wechat.ts`（签名获取）
 - 可选 ICP 备案号页脚（`frontend/src/components/IcpFooter.tsx`）：仅当部署方配置 `VITE_ICP_BEIAN` 时渲染（链接工信部 `beian.miit.gov.cn`），未配置时零 DOM 痕迹；页脚挂在登录页，号码只写在部署机 `frontend/.env.local`（已 gitignore），仓库与开源发布不含任何具体号码，保证可随时 `git pull` 更新
 - 查看当前课程（F5，M4）后端 `backend/src/courses/`：`GET /api/courses` 实时透传雨课堂「正在上课」课程（`/api/v3/classroom/on-lesson` ∩ `/v/course_meta/learning_list/`，对齐 `course_helper` 的 `getCoursesList()`），本站不落库；上游会话失效（50000）映射为 40101 统一登录引导
 - 查看当前课程前端页面 `frontend/src/pages/Courses.tsx`：展示课程名 / 教师 / 课堂名（班级）/ 课程头像（无头像时以课程名首字兜底），支持手动刷新、加载/错误提示与无课程空态；导航栏新增「当前课程」入口（`/courses`）
