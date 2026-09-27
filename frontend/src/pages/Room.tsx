@@ -5,7 +5,7 @@
 // 底栏：扫码分享（微信内优先「微信扫一扫」，非微信/失败用全屏相机，左下角相册可本地识别图片）+ 分享房间
 // 设置抽屉：房间信息、成员、「收到消息立即签到」开关、离开/关闭房间
 
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { closeRoom } from '../api/room'
@@ -149,7 +149,16 @@ async function signAndBroadcast(raw: string): Promise<string> {
   }
 }
 
-function QrCard({ raw, by, expireAt }: { raw: string; by: number; expireAt: number }) {
+/** 单条签到码卡片。memo：父级消息流每秒重渲时不重复渲染（倒计时由卡片自身 tick） */
+const QrCard = memo(function QrCard({
+  raw,
+  by,
+  expireAt,
+}: {
+  raw: string
+  by: number
+  expireAt: number
+}) {
   const now = useNow(1000)
   const [signing, setSigning] = useState(false)
   const [result, setResult] = useState<string | null>(null)
@@ -198,7 +207,7 @@ function QrCard({ raw, by, expireAt }: { raw: string; by: number; expireAt: numb
       </div>
     </li>
   )
-}
+})
 
 /** 中间消息流：签到码卡片（最新在底部，自动滚动）+ 签到回执 */
 function MessageStream() {
@@ -279,7 +288,12 @@ function SettingsPanel({
   setAutoSign: (v: boolean) => void
   onClose: () => void
 }) {
-  const { room, name, owner, members, meta } = useRoom()
+  // 逐字段订阅：设置面板只依赖房间元信息，消息流/签到回执变化不应重渲抽屉
+  const room = useRoom((s) => s.room)
+  const name = useRoom((s) => s.name)
+  const owner = useRoom((s) => s.owner)
+  const members = useRoom((s) => s.members)
+  const meta = useRoom((s) => s.meta)
   const userId = useAuth((s) => s.userId)
   const clearRoom = useRoom((s) => s.clearRoom)
   const navigate = useNavigate()
@@ -597,21 +611,28 @@ function InRoomView() {
   }, [inWechat])
 
   // 自动签到：监听 qr_update 新消息，开启时立即提交（去重，只签一次）
+  // 只处理尾部新增（消息对象引用稳定、裁剪只动队首），避免每次事件都重建全量 Set
   const signedRef = useRef(new Set<string>())
+  const lastSeenRef = useRef<QrMsg | null>(null)
   const autoSignRef = useRef(autoSign)
   useEffect(() => {
     autoSignRef.current = autoSign
   }, [autoSign])
   useEffect(() => {
-    return useRoom.subscribe((s, prev) => {
-      if (!autoSignRef.current || s.messages === prev.messages) return
-      const prevKeys = new Set(prev.messages.map(qrKey))
-      for (const m of s.messages) {
+    return useRoom.subscribe((s) => {
+      if (!autoSignRef.current) return
+      const msgs = s.messages
+      const prevLast = lastSeenRef.current
+      // 上一批的最后一条已被裁掉（未找到）时从头遍历，signedRef 保证不会重复提交
+      const from = prevLast === null ? 0 : msgs.lastIndexOf(prevLast) + 1
+      for (let i = from; i < msgs.length; i += 1) {
+        const m = msgs[i]
         const key = qrKey(m)
-        if (prevKeys.has(key) || signedRef.current.has(key)) continue
+        if (signedRef.current.has(key)) continue
         signedRef.current.add(key)
         void signAndBroadcast(m.raw)
       }
+      lastSeenRef.current = msgs.length > 0 ? msgs[msgs.length - 1] : null
     })
   }, [])
 

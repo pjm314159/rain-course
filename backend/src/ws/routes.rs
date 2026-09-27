@@ -98,7 +98,8 @@ async fn connection(
     let (outbox_tx, mut outbox_rx) = mpsc::unbounded_channel::<Outbound>();
     let (close_tx, mut close_rx) = mpsc::unbounded_channel::<u16>();
     let conn_id = hub.register(user_id, outbox_tx, close_tx.clone(), Now::real());
-    let mut lobby_rx = hub.subscribe_lobby();
+    // lobby 订阅仅在「不在任何房间」时持有：进房即退订，把广场全量广播的代价限定在广场页连接上
+    let mut lobby_rx = Some(hub.subscribe_lobby());
 
     let (mut sink, mut stream) = socket.split();
     let mut seq: u64 = 0;
@@ -155,8 +156,17 @@ async fn connection(
             out = outbox_rx.recv() => {
                 match out {
                     None => break,
-                    Some(Outbound::Subscribe(rx)) => room_rx = Some(rx),
-                    Some(Outbound::Unsubscribe) => room_rx = None,
+                    Some(Outbound::Subscribe(rx)) => {
+                        room_rx = Some(rx);
+                        lobby_rx = None; // 进房：不再接收广场广播
+                    }
+                    Some(Outbound::Unsubscribe) => {
+                        room_rx = None;
+                        // 回到 lobby：重新订阅（其间错过的 plaza_update 由前端 REST 拉取兜底）
+                        if lobby_rx.is_none() {
+                            lobby_rx = Some(hub.subscribe_lobby());
+                        }
+                    }
                 }
             }
             ev = async { room_rx.as_mut().expect("precondition").recv().await }, if room_rx.is_some() => {
@@ -175,7 +185,7 @@ async fn connection(
                     Err(broadcast::error::RecvError::Closed) => room_rx = None,
                 }
             }
-            ev = lobby_rx.recv() => {
+            ev = async { lobby_rx.as_mut().expect("precondition").recv().await }, if lobby_rx.is_some() => {
                 match ev {
                     Ok(m) => {
                         if !send_msg(&mut sink, &mut seq, m).await {
@@ -260,7 +270,7 @@ async fn handle_client_msg(
                 return send_msg(sink, seq, err).await;
             }
             match hub.share_qr(conn_id, &raw, Now::real()) {
-                Ok(_) => true,
+                Ok(()) => true,
                 Err(e) => {
                     send_msg(
                         sink,

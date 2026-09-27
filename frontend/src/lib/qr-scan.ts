@@ -70,7 +70,7 @@ async function decodeByJsQr(img: HTMLImageElement): Promise<string> {
 /** 相机帧解码前的最大边长：大分辨率帧先等比缩小，控制每帧解码耗时 */
 const CAMERA_DECODE_EDGE = 1280
 
-/** 每帧解码间隔（ms）：识别失败/内容被拒时继续下一帧 */
+/** 每帧解码间隔（ms）：识别失败/内容被拒时继续下一帧（native/jsQR 两路统一节流） */
 const FRAME_INTERVAL_MS = 300
 
 /**
@@ -114,7 +114,7 @@ async function startNative(
 ): Promise<ScannerHandle> {
   const detector = new window.BarcodeDetector!({ formats: ['qr_code'] })
   let stopped = false
-  let raf = 0
+  let timer = 0
   const tick = async () => {
     if (stopped) return
     try {
@@ -127,11 +127,13 @@ async function startNative(
     } catch {
       // 单帧解码失败忽略，继续下一帧
     }
-    raf = requestAnimationFrame(() => void tick())
+    // 按 FRAME_INTERVAL_MS 节流（此前每帧 rAF 都跑 detect，白耗 CPU/GPU）
+    if (stopped) return // detect 期间被 stop：不再排队下一帧
+    timer = window.setTimeout(() => void tick(), FRAME_INTERVAL_MS)
   }
   function stop() {
     stopped = true
-    cancelAnimationFrame(raf)
+    window.clearTimeout(timer)
     stopStream(stream)
   }
   void tick()
