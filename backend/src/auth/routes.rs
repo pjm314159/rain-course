@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::token;
 use super::yk_client::{self, YkClient};
@@ -86,7 +86,7 @@ async fn login(
         .yk
         .login_password(&body.account, &body.password, &body.ticket, &body.rand)
         .await?;
-    Ok(session_response(&st, session))
+    Ok(session_response(&st, session, json!({})))
 }
 
 #[derive(Deserialize)]
@@ -128,7 +128,7 @@ async fn sms_verify(
         .yk
         .login_sms(&body.phone, &body.code, &body.ticket, &body.rand)
         .await?;
-    Ok(session_response(&st, session))
+    Ok(session_response(&st, session, json!({})))
 }
 
 async fn qrcode(State(st): State<Arc<AppState>>) -> Result<Response, AppError> {
@@ -150,15 +150,16 @@ async fn qr_poll(
             json!({ "code": 0, "msg": "ok", "data": { "status": "pending" } }),
         )
         .into_response()),
-        yk_client::QrPoll::Success(session) => {
-            let resp = session_response(&st, session);
-            Ok(resp)
-        }
+        yk_client::QrPoll::Success(session) => Ok(session_response(
+            &st,
+            session,
+            json!({ "status": "success" }),
+        )),
     }
 }
 
-/// 登录成功公共尾部：存会话 → 签发 sid cookie → 返回 user_id
-fn session_response(st: &AppState, session: yk_client::Session) -> Response {
+/// 登录成功公共尾部：存会话 → 签发 sid cookie → 返回 user_id（data 可携带额外字段）
+fn session_response(st: &AppState, session: yk_client::Session, mut data: Value) -> Response {
     st.sessions
         .write()
         .expect("session lock poisoned")
@@ -168,16 +169,14 @@ fn session_response(st: &AppState, session: yk_client::Session) -> Response {
         now_unix() + st.config.cookie_ttl_secs,
         &st.config.server_secret,
     );
+    data["user_id"] = json!(session.user_id);
     (
         StatusCode::OK,
         [(
             header::SET_COOKIE,
             session_cookie(&sid, st.config.cookie_ttl_secs),
         )],
-        Json(json!({
-            "code": 0, "msg": "ok",
-            "data": { "user_id": session.user_id }
-        })),
+        Json(json!({ "code": 0, "msg": "ok", "data": data })),
     )
         .into_response()
 }
@@ -638,6 +637,38 @@ mod tests {
         let v = body_json(resp).await;
         assert_eq!(v["code"], 0);
         assert_eq!(v["data"]["status"], "pending");
+    }
+
+    #[tokio::test]
+    async fn qr_poll_success_returns_status_and_user_id() {
+        // 契约：扫码确认后前端靠 data.status == "success" 跳转登录态
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/user/login"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({
+                        "code": 0, "msg": "OK",
+                        "data": {"id": "42"}
+                    }))
+                    .append_header("Set-Cookie", "sessionid=qr88; Path=/"),
+            )
+            .mount(&server)
+            .await;
+
+        let resp = app_with(&server.uri())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/qrcode/poll?token=tk")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let v = body_json(resp).await;
+        assert_eq!(v["code"], 0);
+        assert_eq!(v["data"]["status"], "success");
+        assert_eq!(v["data"]["user_id"], 42);
     }
 
     // ---- extract_sid ----

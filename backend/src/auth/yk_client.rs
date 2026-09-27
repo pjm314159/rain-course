@@ -225,7 +225,9 @@ impl YkClient {
         }
     }
 
-    /// 用已有 cookie 探测会话归属；雨课堂会话失效时返回 Unauthorized
+    /// 用已有 cookie 探测会话归属（qr_poll/finish_login 的兜底）
+    /// 实测（2026-09-27）：user_info 成功响应无 code 字段，为
+    /// `{msg, data: {user_profile: {user_id}}, success: true}`；失败时才是信封 `{code: 50000, ...}`
     pub async fn whoami(&self, cookie_header: &str) -> Result<i64, AppError> {
         let resp = self
             .http
@@ -238,16 +240,31 @@ impl YkClient {
             .json()
             .await
             .map_err(|e| AppError::Internal(e.into()))?;
-        let data = map_envelope(envelope)?;
-        data.pointer("/user_profile/user_id")
-            .and_then(Value::as_i64)
-            .ok_or_else(|| AppError::Upstream {
-                upstream_code: -1,
-                message: "user_info 响应缺少 user_id".into(),
-            })
+        // 失败路径是标准信封（如会话失效 {"code":50000,...}）
+        if let Some(c) = envelope.get("code").and_then(Value::as_i64)
+            && c != 0
+        {
+            let message = envelope
+                .get("msg")
+                .and_then(Value::as_str)
+                .unwrap_or("上游未知错误")
+                .to_string();
+            return Err(AppError::Upstream {
+                upstream_code: c,
+                message,
+            });
+        }
+        // 成功路径无 code，user_id 实测为数字（兼容字符串）
+        match envelope.pointer("/data/user_profile/user_id") {
+            Some(Value::Number(n)) => n.as_i64().ok_or_else(user_id_missing_error),
+            Some(Value::String(s)) => s.parse().map_err(|_| user_id_missing_error()),
+            _ => Err(user_id_missing_error()),
+        }
     }
 
-    /// 登录报文公共尾部：发请求 → 折叠 cookie → 校验信封 → 探测 user_id
+    /// 登录报文公共尾部：发请求 → 折叠 cookie → 校验信封 → 解析 user_id
+    /// 实测（2026-09-27）：login/app 成功 data 直接携带 `{"id":"96796676",...}`，
+    /// 与扫码 user/login 结构一致，正常路径免二次 user_info 探测
     async fn finish_login(&self, body: Value) -> Result<Session, AppError> {
         let resp = self
             .http
@@ -262,8 +279,15 @@ impl YkClient {
             .json()
             .await
             .map_err(|e| AppError::Internal(e.into()))?;
-        map_envelope(envelope)?;
+        let data = map_envelope(envelope)?;
 
+        if let Some(user_id) = parse_user_id(&data) {
+            return Ok(Session {
+                user_id,
+                cookie_header: cookies,
+            });
+        }
+        // 兜底：data 无 id 时用 user_info 探测
         let user_id = self.whoami(&cookies).await?;
         Ok(Session {
             user_id,
@@ -278,6 +302,13 @@ fn parse_user_id(data: &Value) -> Option<i64> {
         Some(Value::String(s)) => s.parse().ok(),
         Some(Value::Number(n)) => n.as_i64(),
         _ => None,
+    }
+}
+
+fn user_id_missing_error() -> AppError {
+    AppError::Upstream {
+        upstream_code: -1,
+        message: "user_info 响应缺少 user_id".into(),
     }
 }
 
@@ -397,6 +428,75 @@ mod tests {
                 assert_eq!(upstream_code, 1004);
                 assert_eq!(message, "密码错误");
             }
+            other => panic!("expected Upstream, got {other:?}"),
+        }
+    }
+
+    // ---- 登录尾部：data.id 直读 + user_info 实测结构 ----
+
+    #[tokio::test]
+    async fn finish_login_prefers_data_id_and_skips_user_info() {
+        // 实测（2026-09-27）：login/app 成功 data 直接携带 {"id":"96796676",...}
+        // 正常路径不应再调 user_info（故意不挂该 mock，若被调用 wiremock 404 会致失败）
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/user/login/app"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({
+                        "code": 0, "msg": "",
+                        "data": {"id": "96796676", "name": "彭嘉铭"}
+                    }))
+                    .append_header("Set-Cookie", "sessionid=abc; Path=/"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = YkClient::new(&server.uri());
+        let session = client
+            .login_password("13800000000", "pw", "t", "r")
+            .await
+            .unwrap();
+        assert_eq!(session.user_id, 96796676);
+        assert_eq!(session.cookie_header, "sessionid=abc");
+    }
+
+    #[tokio::test]
+    async fn whoami_parses_real_user_info_without_code_field() {
+        // 实测（2026-09-27）：user_info 成功响应无 code 字段
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v/course_meta/user_info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "msg": "0.0.1",
+                "data": { "user_profile": { "user_id": 96796676, "name": "彭嘉铭" } },
+                "success": true
+            })))
+            .mount(&server)
+            .await;
+
+        let client = YkClient::new(&server.uri());
+        let uid = client.whoami("sessionid=x").await.unwrap();
+        assert_eq!(uid, 96796676);
+    }
+
+    #[tokio::test]
+    async fn whoami_maps_upstream_error_envelope() {
+        // 实测：user_info 失败时才是标准信封（无 cookie 时 {"code":50000,...}）
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v/course_meta/user_info"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"code": 50000, "msg": "", "data": {}})),
+            )
+            .mount(&server)
+            .await;
+
+        let client = YkClient::new(&server.uri());
+        let err = client.whoami("sessionid=x").await.unwrap_err();
+        match err {
+            AppError::Upstream { upstream_code, .. } => assert_eq!(upstream_code, 50000),
             other => panic!("expected Upstream, got {other:?}"),
         }
     }
