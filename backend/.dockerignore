@@ -1,0 +1,7 @@
+# 构建上下文只需要 Cargo.toml / Cargo.lock / src
+target
+logs
+.env
+.env.*
+Dockerfile
+.dockerignore

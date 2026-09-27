@@ -285,22 +285,39 @@ frontend/src/
 
 ## 8. 部署设计（Docker Compose）
 
+仓库根 `docker-compose.yml`：
+
 ```yaml
 services:
-  backend:
-    build: ./backend          # 多阶段: rust → debian:bookworm-slim
-    expose: ["3000"]
-    healthcheck: GET /api/health
+  backend:                        # 多阶段: rust:1-bookworm → debian:bookworm-slim
+    build: ./backend
+    env_file: [.env]
+    expose: ["3000"]              # 仅容器网络内可达
+    volumes: ["logs:/app/logs"]   # tracing 按天滚动日志持久化
+    healthcheck: curl -fsS http://localhost:3000/api/health
+    mem_limit: 512m
     restart: unless-stopped
-  frontend:
-    build: ./frontend         # 多阶段: node build → nginx + 产物 + nginx.conf
-    ports: ["80:80", "443:443"]
-    depends_on: [backend]
+  frontend:                       # 多阶段: node:24-bookworm-slim → nginx:stable-alpine
+    build:
+      context: ./frontend
+      args: { VITE_API_BASE_URL, VITE_CAPTCHA_APP_ID, VITE_ICP_BEIAN, VITE_WX_DEBUG }
+    ports: ["80:80"]
+    depends_on: { backend: { condition: service_healthy } }
+    mem_limit: 128m
     restart: unless-stopped
 ```
 
-- Nginx 要点：`location /ws` 含 `proxy_http_version 1.1`、`Upgrade`/`Connection` 头、`proxy_read_timeout 300s`；gzip；SPA `try_files ... /index.html`；TLS 证书卷挂载；
-- 2G 机器建议 compose 限制内存（backend ≤ 512M）并开启 swap 兜底。
+- **只暴露 80**：TLS 交给前置反代终结（`frontend/nginx.conf` 末尾保留「容器内终结 TLS」的注释模板，需要时打开端口与证书卷即可）；后端 3000 不映射宿主机；
+- **构建期变量**（`VITE_*`）经 `build.args` 从根 `.env` 注入；仓库只留 `.env.example` 模板，具体值（含 `VITE_ICP_BEIAN`、`SERVER_SECRET`）只存在部署机 `.env`（gitignore），开源仓库零污染、可随时 `git pull`；
+- **Nginx**（`frontend/nginx.conf`）要点：
+  - `location /ws`：`proxy_http_version 1.1` + `Upgrade`/`Connection` 头透传、`proxy_read_timeout 300s`；
+  - `location /api/`：读超时 120s，覆盖微信扫码登录的 30s 服务端长轮询；
+  - gzip 显式声明 `gzip_types`（nginx 默认只压 `text/html`）+ `gzip_vary on`，并开 `gzip_static on`（构建期由 `vite-plugin-compression2` 生成 `.gz` 直出，省运行时 CPU）；
+  - `/assets/` 长缓存 `public, max-age=31536000, immutable`，`index.html` 强制 `no-cache`（发版即生效）；
+  - SPA `try_files $uri $uri/ /index.html`；
+- **2G 机器**：compose 限制内存（backend ≤ 512M / frontend ≤ 128M），宿主另开 swap 兜底（命令见 README 部署章节）；
+- **运行时配置**：根 `.env` 一个文件同时承担 compose 变量插值（`build.args`）与 `backend` 容器环境变量注入（`env_file`）两个角色；缺 `.env` 时 compose 直接报错，避免静默回落到不安全的 `dev-secret`；
+- 后端镜像**非 root 运行**（uid 10001），`LOG_DIR=/app/logs` 由命名卷挂载。
 
 ---
 
