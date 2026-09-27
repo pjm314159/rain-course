@@ -1,6 +1,11 @@
 backend/target/
 .temp/
 
+# 前端
+node_modules/
+.pnpm-store/
+frontend/dist/
+
 course_helper/
 
 .env

@@ -53,8 +53,9 @@ pub enum QrPoll {
 }
 
 pub struct YkClient {
-    base: String,
-    http: reqwest::Client,
+    /// 雨课堂基地址（signin 模块的扩展方法也复用）
+    pub(crate) base: String,
+    pub(crate) http: reqwest::Client,
 }
 
 impl YkClient {
