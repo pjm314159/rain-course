@@ -8,6 +8,7 @@ import { ApiError } from '../api/client'
 import { createRoom, fetchPlaza } from '../api/room'
 import { useRoom } from '../stores/room'
 import { getWs } from '../ws/client'
+import { parseRoomInput } from '../lib/room-link'
 import { WS_ERRORS, type PlazaRoom, type RoomMeta } from '../ws/protocol'
 import Modal from '../components/Modal'
 
@@ -240,25 +241,26 @@ function CreateDialog({
   )
 }
 
-/** 加入对话框：JoinForm 逻辑迁入（房间号 + needPassword 时密码框） */
+/** 加入对话框：JoinForm 逻辑迁入（房间号 / 邀请短链 + needPassword 时密码框） */
 function JoinDialog({
   error,
   onJoinIntent,
   onClose,
 }: {
   error: string | null
-  /** 发起加入即标记（带输入的房间号），joined 帧到达后由父组件统一跳转 */
+  /** 发起加入即标记（带解析出的房间号），joined 帧到达后由父组件统一跳转 */
   onJoinIntent: (target: number) => void
   onClose: () => void
 }) {
   const needPassword = useRoom((s) => s.needPassword)
   const [room, setRoom] = useState('')
   const [password, setPassword] = useState('')
-  const roomId = Number(room)
+  // 支持纯数字房间号或邀请短链（…/r/{房间号}）
+  const roomId = parseRoomInput(room)
 
   function submit(e: React.FormEvent) {
     e.preventDefault()
-    if (!Number.isInteger(roomId) || roomId <= 0) return
+    if (roomId === null) return
     onJoinIntent(roomId)
     getWs().send({ type: 'join', room: roomId, password: password.trim() || undefined })
   }
@@ -267,13 +269,12 @@ function JoinDialog({
     <Modal onClose={onClose} title="加入房间">
       <form className="mt-4 space-y-4" onSubmit={submit}>
         <label className={labelCls}>
-          房间号
+          房间号或邀请链接
           <input
             className={inputCls}
-            inputMode="numeric"
             value={room}
-            onChange={(e) => setRoom(e.target.value.replace(/\D/g, ''))}
-            placeholder="6 位数字房间号"
+            onChange={(e) => setRoom(e.target.value)}
+            placeholder="6 位数字房间号，或粘贴邀请链接"
           />
         </label>
         {(needPassword || password) && (

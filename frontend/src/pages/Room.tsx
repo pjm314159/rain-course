@@ -4,11 +4,12 @@
 // 底栏：扫码分享 + 粘贴推送；设置抽屉：房间信息、成员、「收到消息立即签到」开关、离开/关闭房间
 
 import { useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { closeRoom } from '../api/room'
 import { submitSign } from '../api/sign'
 import { startQrScan, type ScannerHandle } from '../lib/qr-scan'
+import { inviteLink } from '../lib/room-link'
 import { useNow } from '../lib/use-now'
 import { useAuth } from '../stores/auth'
 import { useRoom } from '../stores/room'
@@ -30,6 +31,109 @@ function formatCountdown(remainMs: number): string {
 
 function qrKey(m: QrMsg): string {
   return `${m.raw}-${m.expire_at}`
+}
+
+/** 短链落地页：打开 /r/{roomId} 即申请加入（密码房弹密码框），joined 后进房间页 */
+export function JoinByLink() {
+  const { roomId } = useParams<{ roomId: string }>()
+  const navigate = useNavigate()
+  const id = Number(roomId)
+  const valid = Number.isInteger(id) && id > 0
+  const room = useRoom((s) => s.room)
+  const needPassword = useRoom((s) => s.needPassword)
+  const lastError = useRoom((s) => s.lastError)
+  const [password, setPassword] = useState('')
+  const requestedRef = useRef(false)
+
+  useEffect(() => {
+    getWs().ensureConnected()
+  }, [])
+
+  // 已在该房间 → 直达房间页；否则挂载时发一次 join（密码房收 join_need_password 后补密码）
+  useEffect(() => {
+    if (room === id) {
+      navigate('/room', { replace: true })
+      return
+    }
+    if (!valid || requestedRef.current) return
+    requestedRef.current = true
+    getWs().send({ type: 'join', room: id })
+  }, [room, id, valid, navigate])
+
+  function submitPassword(e: React.FormEvent) {
+    e.preventDefault()
+    getWs().send({ type: 'join', room: id, password: password.trim() || undefined })
+  }
+
+  const errText = lastError?.msg ?? null
+
+  return (
+    <div className="flex h-screen flex-col bg-canvas">
+      <div className="flex flex-1 items-center justify-center px-4">
+        <div className="w-full max-w-sm">
+          {!valid ? (
+            <div className="rounded-lg bg-surface-card p-8 text-center">
+              <p className="text-lg font-medium text-ink">邀请链接无效</p>
+              <Link
+                to="/"
+                className="mt-4 inline-flex w-full items-center justify-center rounded-md bg-ink px-5 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-ink-active"
+              >
+                去广场
+              </Link>
+            </div>
+          ) : needPassword ? (
+            <form
+              className="space-y-3 rounded-lg border border-hairline bg-canvas p-6 shadow-sm"
+              onSubmit={submitPassword}
+            >
+              <h2 className="text-lg font-semibold text-ink">该房间需要密码</h2>
+              {errText && <p className="text-sm text-error">{errText}</p>}
+              <input
+                className="w-full rounded-md border border-hairline bg-canvas px-4 py-3 text-sm text-ink focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/20"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="输入房间密码"
+                autoFocus
+              />
+              <button
+                type="submit"
+                className="w-full rounded-md bg-ink px-4 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-ink-active"
+              >
+                加入房间
+              </button>
+            </form>
+          ) : room === null ? (
+            <div className="rounded-lg border border-hairline bg-canvas p-8 text-center">
+              {errText ? (
+                <>
+                  <p className="text-lg font-medium text-error">{errText}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      requestedRef.current = false
+                      getWs().send({ type: 'join', room: id })
+                    }}
+                    className="mt-4 w-full rounded-md bg-ink px-5 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-ink-active"
+                  >
+                    重试
+                  </button>
+                </>
+              ) : (
+                <p className="text-sm text-muted">正在加入房间 {id}…</p>
+              )}
+              <Link
+                to="/"
+                className="mt-4 block text-sm font-medium text-brand-pink hover:underline"
+              >
+                去广场
+              </Link>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 /** 「收到消息立即签到」开关（localStorage 持久化，默认关：点击 URL 框才签到） */
@@ -264,6 +368,19 @@ function SettingsPanel({
               <div className="rounded-md bg-surface-soft p-3">
                 <p className="text-xs text-muted">房间名</p>
                 <p className="mt-0.5 text-sm text-ink">{name ?? '未命名房间'}</p>
+              </div>
+              <div className="rounded-md bg-surface-soft p-3">
+                <p className="text-xs text-muted">邀请链接</p>
+                <div className="mt-0.5 flex items-center justify-between gap-2">
+                  <p className="truncate font-mono text-xs text-body">{inviteLink(room)}</p>
+                  <button
+                    type="button"
+                    onClick={() => void navigator.clipboard.writeText(inviteLink(room))}
+                    className="shrink-0 rounded px-2 py-1 text-xs text-muted transition-colors hover:bg-surface-card hover:text-ink"
+                  >
+                    复制
+                  </button>
+                </div>
               </div>
               {meta && (
                 <div className="rounded-md bg-surface-soft p-3">
