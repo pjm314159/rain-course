@@ -14,8 +14,9 @@ import Modal from '../components/Modal'
 
 // 视觉样式常量（延续 qrcode_share 设计令牌）
 const labelCls = 'block text-sm font-medium text-ink'
-const inputCls =
-  'mt-1 w-full rounded-md border border-hairline bg-canvas px-4 py-3 text-sm text-ink transition-colors duration-150 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/20'
+const inputClsBase =
+  'w-full rounded-md border border-hairline bg-canvas px-4 py-3 text-sm text-ink transition-colors duration-150 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/20'
+const inputCls = 'mt-1 ' + inputClsBase
 const btnPrimaryCls =
   'inline-flex w-full items-center justify-center rounded-md bg-ink px-5 py-3 text-sm font-semibold text-on-primary transition-colors duration-150 hover:bg-ink-active focus:outline-none focus:ring-2 focus:ring-ink/30 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
 // 底部操作条按钮（参照 ChannelPage 的虚线品牌按钮）
@@ -102,7 +103,44 @@ function DetailDialog({
   )
 }
 
-/** 创建对话框：CreateForm 逻辑原样迁入（REST 建房 + join 消息） */
+/** 带单位后缀的数值输入：值以字符串保存，输入期间不做校验/回弹（可随意删空重输），提交时统一校验 */
+function NumberField({
+  label,
+  unit,
+  hint,
+  value,
+  onChange,
+  inputMode,
+}: {
+  label: string
+  unit: string
+  hint?: string
+  value: string
+  onChange: (v: string) => void
+  inputMode: 'numeric' | 'decimal'
+}) {
+  return (
+    <label className={labelCls}>
+      {label}
+      <span className="relative mt-1 block">
+        <input
+          className={inputClsBase + ' pr-14'}
+          type="text"
+          inputMode={inputMode}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          aria-label={label}
+        />
+        <span className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2 text-sm text-muted">
+          {unit}
+        </span>
+      </span>
+      {hint && <span className="mt-1 block text-xs text-muted">{hint}</span>}
+    </label>
+  )
+}
+
+/** 创建对话框：房间设置（消息有效期 / 房间寿命）默认可见，课程信息可折叠 */
 function CreateDialog({
   onClose,
   onProceed,
@@ -112,13 +150,31 @@ function CreateDialog({
 }) {
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
-  const [ttlMins, setTtlMins] = useState(60)
+  // 数值项用字符串保存：让输入过程可以删空/处于中间态，只在提交时校验并钳制
+  const [ttlMins, setTtlMins] = useState('60')
+  const [lifetimeHours, setLifetimeHours] = useState('4')
   const [permanent, setPermanent] = useState(false)
-  const [lifetimeMins, setLifetimeMins] = useState(240)
   const [advanced, setAdvanced] = useState(false)
   const [meta, setMeta] = useState<RoomMeta>({})
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+
+  /** 提交时校验数值项（后端规则：消息有效期 1–60 分钟；房间寿命 ≥1 分钟），不合法返回 null */
+  function parseNumbers(): { ttlSecs: number; lifetimeMins: number | undefined } | null {
+    const ttl = Number(ttlMins.trim())
+    if (!Number.isInteger(ttl) || ttl < 1 || ttl > 60) {
+      setErr('消息有效期需为 1–60 的整数分钟')
+      return null
+    }
+    if (permanent) return { ttlSecs: ttl * 60, lifetimeMins: undefined }
+    const hours = Number(lifetimeHours.trim())
+    if (!Number.isFinite(hours) || hours <= 0) {
+      setErr('房间寿命需为大于 0 的小时数')
+      return null
+    }
+    // 小时 → 分钟（后端 lifetime_mins 最小 1 分钟）
+    return { ttlSecs: ttl * 60, lifetimeMins: Math.max(1, Math.round(hours * 60)) }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -128,15 +184,17 @@ function CreateDialog({
       setErr('请填写房间名')
       return
     }
+    const nums = parseNumbers()
+    if (nums === null) return
     setBusy(true)
     setErr(null)
     try {
       const { room_id } = await createRoom({
         name: trimmed,
         password: password.trim() || undefined,
-        qr_ttl_secs: Math.min(3600, Math.max(1, Math.floor(ttlMins * 60))),
+        qr_ttl_secs: nums.ttlSecs,
         permanent,
-        lifetime_mins: permanent ? undefined : Math.max(1, lifetimeMins),
+        lifetime_mins: nums.lifetimeMins,
         meta: Object.values(meta).some((v) => v?.trim()) ? meta : undefined,
       })
       // 创建成功即自动加入房间；WS 未 open 时由连接层排队补发
@@ -170,8 +228,8 @@ function CreateDialog({
             value={name}
             onChange={(e) => setName(e.target.value)}
             maxLength={32}
-            required
             placeholder="例如：周一高数课"
+            aria-label="房间名"
           />
         </label>
         <label className={labelCls}>
@@ -184,6 +242,35 @@ function CreateDialog({
             maxLength={64}
           />
         </label>
+        <div className="space-y-4 rounded-md bg-surface-soft p-3">
+          <NumberField
+            label="消息有效期"
+            unit="分钟"
+            hint="1–60：每条签到码在房间内的可见时长"
+            value={ttlMins}
+            onChange={setTtlMins}
+            inputMode="numeric"
+          />
+          {!permanent && (
+            <NumberField
+              label="房间寿命"
+              unit="小时"
+              hint="到期后房间自动关闭（默认 4 小时）"
+              value={lifetimeHours}
+              onChange={setLifetimeHours}
+              inputMode="decimal"
+            />
+          )}
+          <label className="flex items-center gap-2 text-sm text-ink">
+            <input
+              className="h-4 w-4 accent-ink"
+              type="checkbox"
+              checked={permanent}
+              onChange={(e) => setPermanent(e.target.checked)}
+            />
+            永久房间（14 天无消息仍会被回收）
+          </label>
+        </div>
         <button
           type="button"
           className="flex items-center gap-1 text-sm text-muted transition-colors hover:text-ink"
@@ -193,38 +280,6 @@ function CreateDialog({
         </button>
         {advanced && (
           <div className="grid grid-cols-2 gap-3 animate-slide-down">
-            <label className={labelCls}>
-              消息有效期（分钟，≤60）
-              <input
-                className={inputCls}
-                type="number"
-                min={1}
-                max={60}
-                value={ttlMins}
-                onChange={(e) => setTtlMins(Number(e.target.value) || 60)}
-              />
-            </label>
-            {!permanent && (
-              <label className={labelCls}>
-                生命周期（分钟，默认 240 = 4 小时）
-                <input
-                  className={inputCls}
-                  type="number"
-                  min={1}
-                  value={lifetimeMins}
-                  onChange={(e) => setLifetimeMins(Number(e.target.value) || 240)}
-                />
-              </label>
-            )}
-            <label className="col-span-2 flex items-center gap-2 text-sm text-ink">
-              <input
-                className="h-4 w-4 accent-ink"
-                type="checkbox"
-                checked={permanent}
-                onChange={(e) => setPermanent(e.target.checked)}
-              />
-              永久房间（14 天无消息仍会被回收）
-            </label>
             {metaField('course_name', '课程名称')}
             {metaField('location', '上课地点')}
             {metaField('teacher', '教师')}
