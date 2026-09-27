@@ -18,7 +18,7 @@
 | 会话 | 签名 cookie（`axum-extra` `PrivateCookieJar`，HMAC 防篡改，14 天滑动续期；校验只验签名，无服务端状态） |
 | 错误 | `thiserror` + `anyhow` |
 | 前端 | Vite `react-ts` + `react-router` + `zustand` + TailwindCSS；包管理器 **pnpm** |
-| 扫码 | `BarcodeDetector` 特性检测 → 降级 `@zxing/browser`（相机实时扫码 + 图片上传识别，均在浏览器本地解码）；微信内走 JS-SDK |
+| 扫码 | 相机：`BarcodeDetector` 特性检测 → 降级 `@zxing/browser`；图片：`BarcodeDetector` → `jsQR`（相机与图片均在浏览器本地解码，实测 zxing 静态图解码对整数倍缩放的二维码会失败）；微信内走 JS-SDK |
 | WS 客户端 | 原生 WebSocket 封装（心跳、指数退避重连、房间状态机） |
 | 部署 | Docker Compose：`nginx:stable-alpine`（TLS + 静态 + 反代）+ axum 多阶段构建镜像 |
 | 存储 | **无数据库、无 Redis**。站点登录态 = 签名 cookie（无服务端存储）；雨课堂凭证、房间、二维码内容、WS 状态全内存，服务重启需重新登录（已接受的取舍） |
@@ -169,7 +169,7 @@ raw 内容
 - **任何未通过校验的内容：直接返回业务错误，绝不发起任何出站请求**（SSRF 与钓鱼转发防线）；
 - 请求头按旧项目携带 `xtbz: ykt`、`x-client: app` 等；cookie 会话附 `x-csrftoken` / `x-uid` / `sessionid`（见 `api_service.dart`、`session/cookie.dart`）；
 - 前端仅负责采集与展示，不自行请求二维码内的 URL。
-- 图片上传识别：上传的二维码截图由前端本地解码（`BarcodeDetector` 优先、`@zxing/browser` 降级），图片不离开浏览器、不上传服务器（单图 ≤ 5MB）；识别出的 URL 仍走本节统一校验与签到流程。
+- 图片上传识别：上传的二维码截图由前端本地解码（`BarcodeDetector` 优先、`jsQR` 降级，见 §3.2.2），图片不离开浏览器、不上传服务器（单图 ≤ 5MB；超大图先等比缩到 ≤ 2048px 再解码）；识别出的 URL 仍走本节统一校验与签到流程。
 
 ---
 
@@ -268,8 +268,8 @@ frontend/src/
 │   ├── worker.ts      # SharedWorker 脚本：同源所有标签页共享一条连接
 │   └── client.ts      # WsHandle：优先 SharedWorker，降级 BroadcastChannel + localStorage
 │                      #   选主（TTL 4s）；leader 直驱连接（BC 不回显发送者）；getWs() 单例
-├── lib/          # qr-scan（相机 BarcodeDetector→zxing 降级）、use-now 倒计时
-├── pages/        # Login / Plaza（首页：搜索+房间卡片+创建/加入对话框）/ Room（房间内：扫码分享、签到码列表）
+├── lib/          # qr-scan（相机 BarcodeDetector→zxing、图片 BarcodeDetector→jsQR）、room-link 短链、use-now 倒计时
+├── pages/        # Login / Plaza（首页：搜索+房间卡片+创建/加入对话框）/ Room（路由 /r/{房间号}：全屏扫码分享、签到码列表）
 ├── components/   # Modal（对话框基础组件，遮罩/Esc 关闭）
 ├── stores/       # zustand: auth store；room store（服务端帧 → UI 状态的纯 reducer，消息 expire_at 倒计时过滤）
 ├── captcha.ts    # 腾讯验证码弹窗（TJCaptcha，AppId 2091064951）

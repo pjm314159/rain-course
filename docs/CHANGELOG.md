@@ -12,7 +12,7 @@
 ### Added
 - 分享房间模块（F3，M3）后端 `backend/src/ws/`：`Hub` 内存态房间管理（创建/加入/密码校验+限速/成员列表/历史消息 FIFO≤100 条+有效期淘汰/自定义生命周期）；`GET /ws` 握手校验本站会话、单用户单连接（旧连接 close 4009）；`POST /api/rooms`、`DELETE /api/rooms/{id}`、`GET /api/plaza`；后台 sweep 任务（心跳假死判死、lobby 空闲 10 分钟回收 close 4000、消息频率超限 close 4008、房间到期/14 天无消息回收）
 - 分享房间前端 WS 客户端 `frontend/src/ws/`：协议类型与后端 `models.rs` 对齐（信封 `{type,seq,...}`、error 码表）；单连接状态机 idle/connecting/lobby/reconnecting/in_room/closed——心跳自动 pong、意外断开指数退避重连 1s→30s、重连自动 rejoin（joined 全量补齐）、4000/4008/4009 与 error 40404 不重连；SharedWorker 多标签页单连接复用，降级 BroadcastChannel + localStorage 选主（TTL 4s，leader 直驱连接规避不回显问题）
-- 分享房间前端页面：房间页（创建/加入/密码、成员列表、二维码分享与 expire_at 倒计时、签到回执 feed、粘贴推送、离开/关闭房间）与广场页（REST 首次拉取 + WS `plaza_update` 实时覆盖，公开房间点击即加入）
+- 分享房间前端页面：房间页（创建/加入/密码、成员列表、二维码分享与 expire_at 倒计时、签到回执 feed、离开/关闭房间）与广场页（REST 首次拉取 + WS `plaza_update` 实时覆盖，公开房间点击即加入）
 - `.env.example`：补全 `WS_*` 房间资源上限配置项（房间数/人数/消息大小/频率/存量/心跳/空闲回收/密码限速等，全部可调）
 - 需求规格 `docs/SPEC.md`：登录（密码/短信/微信扫码三种方式，均必做）、扫码签到（微信 JS-SDK 优先、浏览器相机降级、手动输入兜底）、WebSocket 分享房间（房间密码、房间关联课程信息）、广场（公开房间发现）、查看当前课程（F5）
 - 技术设计 `docs/DESIGN.md`：axum + Vite/React + Nginx + Docker Compose 架构；REST/WS 协议设计；扫码内容域名白名单校验（防 SSRF）；雨课堂真实接口细节（源自 `course_helper` 源码分析）；资源上限设计（房间数/人数/消息大小/频率/存量有界）
@@ -24,13 +24,14 @@
 - Git 主分支使用 `main`，集成分支使用 `dev`；远程仓库 `github.com/pjm314159/rain-course`（origin）
 - 前端包管理器使用 pnpm（CI 同步使用 `pnpm install --frozen-lockfile`）
 - 前端脚手架（Vite + React 19 + TS + React Compiler + oxlint），已清除模板代码并填入项目信息（name/author/描述），新增 `typecheck`/`test` 脚本
-- 扫码页支持上传二维码图片识别签到：浏览器本地解码（`BarcodeDetector` 优先、`@zxing/browser` 降级），图片不上传服务器；单图 ≤ 5MB，识别失败明确提示
+- 扫码页支持上传二维码图片识别签到：浏览器本地解码（`BarcodeDetector` 优先、`jsQR` 降级），图片不上传服务器；单图 ≤ 5MB，识别失败明确提示
 - 后端 `Cargo.toml`：填入项目信息（`rain-course-backend` 0.1.0 / author / 描述），配置 `[lints]`（forbid unsafe、deny unwrap_used 等）与 release 最优 profile（lto=fat、codegen-units=1、panic=abort、strip）；后端暂不引入框架依赖
 - 许可证：全项目使用 GPL-3.0-or-later（LICENSE 为官方全文），`rust-version` 对齐本机 rustc 1.98；创建根 README.md
 
 ### Changed
 - 房间邀请短链：设置面板生成 `{origin}/r/{房间号}` 一键复制；新增 `/r/:roomId` 落地路由（打开即申请加入，密码房弹密码框，joined 后自动进房间页）；广场「加入房间」对话框同时接受纯数字房间号或粘贴的短链 URL
-- 房间页改为 `qrcode_share` ChannelPage 式全屏布局：顶栏左「返回」、正中房间名（大字）+ 房号（小字）、右「设置」；中间为接收的签到码消息流（自动滚动）；底栏「扫码分享」+「粘贴推送」（扫码/粘贴经弹窗操作）；`/room` 路由独立渲染，不再套全局导航栏
+- 房间页改为 `qrcode_share` ChannelPage 式全屏布局：顶栏左「返回」、正中房间名（大字）+ 房号（小字）、右「设置」；中间为接收的签到码消息流（自动滚动）；底栏「扫码分享」（主位）+「分享房间」图标按钮；房间页路由统一为 `/r/{房间号}`（`/room` 已移除，刷新不丢房间）
+- 房间页扫码改为**全屏取景**：左上角关闭、左下角相册（选图后浏览器本地 `jsQR` 识别，识别成功即推送全房间并关闭）；底栏原「粘贴推送」按钮移除，改为右侧「分享房间」——优先 `navigator.share` 系统分享，不支持或失败则复制邀请短链并 toast 提示
 - 设置抽屉（房间页右上角）：房间信息（房号/房间名/课程信息 + 一键复制）、成员列表、「收到消息立即签到」开关（localStorage 持久化，**默认关**——关闭时点击消息内容框才签到）、离开房间/关闭房间（房主）
 - `qr_update` 改为**也回显给发送者**（前端按 raw+expire_at 去重）：签到协作场景下发送者本人同样要在消息流里看到自己分享的码
 - 视觉样式复刻 `qrcode_share` 项目：前端引入 Tailwind CSS v4（`@theme` 设计令牌：奶油画布/墨色文字/品牌色板/Inter 字体），重刷导航与登录/扫码/房间/广场全部页面；房间内头部大号展示数字房间号（一键复制）

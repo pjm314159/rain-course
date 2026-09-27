@@ -4,7 +4,7 @@ import { bindWsToStore } from './stores/room'
 import { useAuth } from './stores/auth'
 import { getWs } from './ws/client'
 import Login from './pages/Login'
-import Room, { JoinByLink } from './pages/Room'
+import Room from './pages/Room'
 import Plaza from './pages/Plaza'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -73,21 +73,12 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
-        {/* 房间页是 ChannelPage 式全屏布局，不套全局导航栏 */}
-        <Route
-          path="/room"
-          element={
-            <RequireAuth>
-              <Room />
-            </RequireAuth>
-          }
-        />
-        {/* 邀请短链 /r/{房间号}：打开即申请加入 */}
+        {/* 房间页（ChannelPage 式全屏布局，不套全局导航栏）：URL 带房号，刷新不丢房间 */}
         <Route
           path="/r/:roomId"
           element={
             <RequireAuth>
-              <JoinByLink />
+              <Room />
             </RequireAuth>
           }
         />

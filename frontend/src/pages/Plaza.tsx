@@ -318,11 +318,11 @@ export default function Plaza() {
       .finally(() => setLoading(false))
   }, [])
 
-  // 加入意图已发起：joined 帧写入 room 后跳转房间页
+  // 加入意图已发起：joined 帧写入 room 后跳转房间页（URL 带房号，刷新不丢房间）
   useEffect(() => {
     if (room !== null && joinPendingRef.current) {
       joinPendingRef.current = false
-      navigate('/room')
+      navigate(`/r/${room}`)
     }
   }, [room, navigate])
 
@@ -369,7 +369,7 @@ export default function Plaza() {
   /** 详情/加入对话框发起加入：仅标记（对话框保持打开展示密码框/错误）；若已在该房间内则直接进入 */
   function joinIntent(target?: number) {
     if (target !== undefined && useRoom.getState().room === target) {
-      navigate('/room')
+      navigate(`/r/${target}`)
       return
     }
     joinPendingRef.current = true

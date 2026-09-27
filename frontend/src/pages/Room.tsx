@@ -1,26 +1,25 @@
-// 房间页：ChannelPage 式全屏布局（参照 qrcode_share，docs/DESIGN.md §4、§7）
+// 房间页（路由 /r/{房间号}，ChannelPage 式全屏布局，参照 qrcode_share，docs/DESIGN.md §4、§7）
+// 已在目标房间 → 直接渲染房间页；否则先申请加入（密码房弹密码框，joined 后切到房间页）——刷新不会丢房间
 // 顶栏：左返回 / 正中房间名（大字）+ 房号（小字）/ 右设置
 // 中间：接收的签到码消息流（默认点击 URL 框才签到）
-// 底栏：扫码分享 + 粘贴推送；设置抽屉：房间信息、成员、「收到消息立即签到」开关、离开/关闭房间
+// 底栏：全屏扫码分享（左下角相册可上传图片本地识别）+ 分享房间
+// 设置抽屉：房间信息、成员、「收到消息立即签到」开关、离开/关闭房间
 
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { closeRoom } from '../api/room'
 import { submitSign } from '../api/sign'
-import { startQrScan, type ScannerHandle } from '../lib/qr-scan'
+import { decodeQrFromImage, startQrScan, type ScannerHandle } from '../lib/qr-scan'
 import { inviteLink } from '../lib/room-link'
 import { useNow } from '../lib/use-now'
 import { useAuth } from '../stores/auth'
 import { useRoom } from '../stores/room'
 import { getWs } from '../ws/client'
-import Modal from '../components/Modal'
 import type { QrMsg } from '../ws/protocol'
 
 // 视觉样式常量（延续 qrcode_share 设计令牌）
 const cardCls = 'rounded-lg border border-hairline bg-canvas p-4'
-const inputCls =
-  'mt-1 w-full rounded-md border border-hairline bg-canvas px-4 py-3 text-sm text-ink transition-colors duration-150 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/20'
 
 function formatCountdown(remainMs: number): string {
   const total = Math.max(0, Math.ceil(remainMs / 1000))
@@ -33,32 +32,18 @@ function qrKey(m: QrMsg): string {
   return `${m.raw}-${m.expire_at}`
 }
 
-/** 短链落地页：打开 /r/{roomId} 即申请加入（密码房弹密码框），joined 后进房间页 */
-export function JoinByLink() {
-  const { roomId } = useParams<{ roomId: string }>()
-  const navigate = useNavigate()
-  const id = Number(roomId)
-  const valid = Number.isInteger(id) && id > 0
-  const room = useRoom((s) => s.room)
+/** 申请加入：打开 /r/{房间号} 挂载即发一次 join（密码房补齐密码），joined 帧到达后由 Room 切到房间页 */
+function JoinView({ id }: { id: number }) {
   const needPassword = useRoom((s) => s.needPassword)
   const lastError = useRoom((s) => s.lastError)
   const [password, setPassword] = useState('')
   const requestedRef = useRef(false)
 
   useEffect(() => {
-    getWs().ensureConnected()
-  }, [])
-
-  // 已在该房间 → 直达房间页；否则挂载时发一次 join（密码房收 join_need_password 后补密码）
-  useEffect(() => {
-    if (room === id) {
-      navigate('/room', { replace: true })
-      return
-    }
-    if (!valid || requestedRef.current) return
+    if (requestedRef.current) return
     requestedRef.current = true
     getWs().send({ type: 'join', room: id })
-  }, [room, id, valid, navigate])
+  }, [id])
 
   function submitPassword(e: React.FormEvent) {
     e.preventDefault()
@@ -68,69 +53,54 @@ export function JoinByLink() {
   const errText = lastError?.msg ?? null
 
   return (
-    <div className="flex h-screen flex-col bg-canvas">
-      <div className="flex flex-1 items-center justify-center px-4">
-        <div className="w-full max-w-sm">
-          {!valid ? (
-            <div className="rounded-lg bg-surface-card p-8 text-center">
-              <p className="text-lg font-medium text-ink">邀请链接无效</p>
-              <Link
-                to="/"
-                className="mt-4 inline-flex w-full items-center justify-center rounded-md bg-ink px-5 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-ink-active"
-              >
-                去广场
-              </Link>
-            </div>
-          ) : needPassword ? (
-            <form
-              className="space-y-3 rounded-lg border border-hairline bg-canvas p-6 shadow-sm"
-              onSubmit={submitPassword}
+    <div className="flex flex-1 items-center justify-center px-4">
+      <div className="w-full max-w-sm">
+        {needPassword ? (
+          <form
+            className="space-y-3 rounded-lg border border-hairline bg-canvas p-6 shadow-sm"
+            onSubmit={submitPassword}
+          >
+            <h2 className="text-lg font-semibold text-ink">该房间需要密码</h2>
+            {errText && <p className="text-sm text-error">{errText}</p>}
+            <input
+              className="w-full rounded-md border border-hairline bg-canvas px-4 py-3 text-sm text-ink focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/20"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="输入房间密码"
+              autoFocus
+            />
+            <button
+              type="submit"
+              className="w-full rounded-md bg-ink px-4 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-ink-active"
             >
-              <h2 className="text-lg font-semibold text-ink">该房间需要密码</h2>
-              {errText && <p className="text-sm text-error">{errText}</p>}
-              <input
-                className="w-full rounded-md border border-hairline bg-canvas px-4 py-3 text-sm text-ink focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/20"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="输入房间密码"
-                autoFocus
-              />
-              <button
-                type="submit"
-                className="w-full rounded-md bg-ink px-4 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-ink-active"
-              >
-                加入房间
-              </button>
-            </form>
-          ) : room === null ? (
-            <div className="rounded-lg border border-hairline bg-canvas p-8 text-center">
-              {errText ? (
-                <>
-                  <p className="text-lg font-medium text-error">{errText}</p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      requestedRef.current = false
-                      getWs().send({ type: 'join', room: id })
-                    }}
-                    className="mt-4 w-full rounded-md bg-ink px-5 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-ink-active"
-                  >
-                    重试
-                  </button>
-                </>
-              ) : (
-                <p className="text-sm text-muted">正在加入房间 {id}…</p>
-              )}
-              <Link
-                to="/"
-                className="mt-4 block text-sm font-medium text-brand-pink hover:underline"
-              >
-                去广场
-              </Link>
-            </div>
-          ) : null}
-        </div>
+              加入房间
+            </button>
+          </form>
+        ) : (
+          <div className="rounded-lg border border-hairline bg-canvas p-8 text-center">
+            {errText ? (
+              <>
+                <p className="text-lg font-medium text-error">{errText}</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    requestedRef.current = false
+                    getWs().send({ type: 'join', room: id })
+                  }}
+                  className="mt-4 w-full rounded-md bg-ink px-5 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-ink-active"
+                >
+                  重试
+                </button>
+              </>
+            ) : (
+              <p className="text-sm text-muted">正在加入房间 {id}…</p>
+            )}
+            <Link to="/" className="mt-4 block text-sm font-medium text-brand-pink hover:underline">
+              去广场
+            </Link>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -244,7 +214,7 @@ function MessageStream() {
       {live.length === 0 && (
         <div className="rounded-lg border border-dashed border-hairline bg-canvas p-8 text-center">
           <p className="text-sm font-medium text-ink">暂无签到码</p>
-          <p className="mt-1 text-xs text-muted">等成员扫码或粘贴推送，收到后点击内容框即可签到</p>
+          <p className="mt-1 text-xs text-muted">等成员扫码分享，收到后点击内容框即可签到</p>
         </div>
       )}
       <ul className="space-y-3">
@@ -309,6 +279,7 @@ function SettingsPanel({
   const { room, name, owner, members, meta } = useRoom()
   const userId = useAuth((s) => s.userId)
   const clearRoom = useRoom((s) => s.clearRoom)
+  const navigate = useNavigate()
   const [closeErr, setCloseErr] = useState<string | null>(null)
 
   async function handleClose() {
@@ -316,6 +287,8 @@ function SettingsPanel({
     try {
       await closeRoom(room)
       clearRoom()
+      // 房间页路由带房号：离开后必须回广场，否则会立刻重新申请加入
+      void navigate('/')
     } catch (e) {
       setCloseErr(e instanceof ApiError ? e.message : '关闭失败')
     }
@@ -325,6 +298,7 @@ function SettingsPanel({
     if (room === null) return
     getWs().send({ type: 'leave', room })
     clearRoom()
+    void navigate('/')
   }
 
   return (
@@ -463,23 +437,29 @@ function SettingsPanel({
   )
 }
 
-/** 底栏弹出的分享编辑器：扫码（自动开相机）或粘贴 */
-function ShareDialog({ mode, onClose }: { mode: 'scan' | 'paste'; onClose: () => void }) {
-  const room = useRoom((s) => s.room)
-  const [raw, setRaw] = useState('')
-  const [scanErr, setScanErr] = useState<string | null>(null)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const scanning = mode === 'scan'
+/** 把二维码内容推送给全房间（相机扫码与相册识别共用） */
+function pushQr(raw: string) {
+  const room = useRoom.getState().room
+  if (room === null) return
+  getWs().send({ type: 'share_qr', room, raw })
+}
 
-  // 扫码分享：识别即推送房间
+/** 全屏扫码分享：取景铺满，左上角关闭、左下角相册（本地识别图片，不上传服务器） */
+function ScanOverlay({ onClose }: { onClose: () => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [decoding, setDecoding] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // 相机取景：检到第一个二维码即推送全房间并关闭
   useEffect(() => {
-    if (!scanning || !videoRef.current) return
+    if (!videoRef.current) return
     let cancelled = false
     let handle: ScannerHandle | null = null
     startQrScan(videoRef.current, (text) => {
-      const trimmed = text.trim()
-      if (!trimmed || room === null) return
-      getWs().send({ type: 'share_qr', room, raw: trimmed })
+      const raw = text.trim()
+      if (!raw) return
+      pushQr(raw)
       onClose()
     })
       .then((h) => {
@@ -487,62 +467,92 @@ function ShareDialog({ mode, onClose }: { mode: 'scan' | 'paste'; onClose: () =>
         else handle = h
       })
       .catch(() => {
-        if (!cancelled) setScanErr('相机不可用，请使用粘贴推送')
+        if (!cancelled) setError('相机不可用，可从左下角相册选择二维码图片')
       })
     return () => {
       cancelled = true
       handle?.stop()
     }
-  }, [scanning, room, onClose])
+  }, [onClose])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  /** 相册：选图后本地解码，识别即推送（图片不离开浏览器） */
+  async function pickImage(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // 允许重复选择同一文件
+    if (!file || decoding) return
+    setDecoding(true)
+    setError(null)
+    try {
+      pushQr(await decodeQrFromImage(file))
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '图片识别失败')
+    } finally {
+      setDecoding(false)
+    }
+  }
 
   return (
-    <Modal onClose={onClose} title={scanning ? '扫码分享' : '粘贴推送'}>
-      {scanning ? (
-        <div className="mt-3">
-          {scanErr ? (
-            <p className="rounded-md bg-error/10 p-3 text-sm text-error">{scanErr}</p>
-          ) : (
-            <div className="overflow-hidden rounded-xl border border-hairline">
-              <video
-                ref={videoRef}
-                muted
-                playsInline
-                aria-label="相机取景"
-                className="aspect-[4/3] w-full bg-black object-cover"
-              />
-            </div>
-          )}
-          <p className="mt-2 text-xs text-muted">对准雨课堂签到二维码，识别后自动推送全房间</p>
-        </div>
-      ) : (
-        <form
-          className="mt-3 space-y-3"
-          onSubmit={(e) => {
-            e.preventDefault()
-            const v = raw.trim()
-            if (!v || room === null) return
-            getWs().send({ type: 'share_qr', room, raw: v })
-            onClose()
-          }}
-        >
-          <textarea
-            rows={3}
-            autoFocus
-            placeholder="粘贴雨课堂签到码内容"
-            value={raw}
-            onChange={(e) => setRaw(e.target.value)}
-            className={inputCls}
-          />
-          <button
-            type="submit"
-            className="inline-flex w-full items-center justify-center rounded-md bg-ink px-5 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-ink-active disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!raw.trim()}
-          >
-            推送给全房间
-          </button>
-        </form>
-      )}
-    </Modal>
+    <div className="fixed inset-0 z-50 bg-black">
+      <video
+        ref={videoRef}
+        muted
+        playsInline
+        aria-label="相机取景"
+        className="h-full w-full object-cover"
+      />
+
+      {/* 左上：关闭 */}
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="关闭扫码"
+        className="absolute top-4 left-4 rounded-full bg-ink/60 p-2 text-on-primary backdrop-blur-sm transition-colors hover:bg-ink/80"
+      >
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <path d="M18 6 6 18M6 6l12 12" />
+        </svg>
+      </button>
+
+      {/* 左下：相册（上传图片本地识别） */}
+      <button
+        type="button"
+        onClick={() => fileRef.current?.click()}
+        disabled={decoding}
+        aria-label="从相册选择二维码图片"
+        className="absolute bottom-8 left-4 rounded-full bg-ink/60 p-3 text-on-primary backdrop-blur-sm transition-colors hover:bg-ink/80 disabled:opacity-60"
+      >
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <circle cx="8.5" cy="8.5" r="1.5" />
+          <path d="m21 15-5-5L5 21" />
+        </svg>
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        hidden
+        aria-label="选择二维码图片"
+        onChange={(e) => void pickImage(e)}
+      />
+
+      <p
+        className={`absolute inset-x-0 bottom-28 px-8 text-center text-sm ${
+          error ? 'text-error' : 'text-on-primary/80'
+        }`}
+      >
+        {error ?? (decoding ? '识别中…' : '对准雨课堂签到二维码，识别后自动推送给全房间')}
+      </p>
+    </div>
   )
 }
 
@@ -552,7 +562,8 @@ function InRoomView() {
   const navigate = useNavigate()
   const [autoSign, setAutoSign] = useAutoSign()
   const [showSettings, setShowSettings] = useState(false)
-  const [shareMode, setShareMode] = useState<'scan' | 'paste' | null>(null)
+  const [scanning, setScanning] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
 
   // 自动签到：监听 qr_update 新消息，开启时立即提交（去重，只签一次）
   const signedRef = useRef(new Set<string>())
@@ -572,6 +583,37 @@ function InRoomView() {
       }
     })
   }, [])
+
+  // 提示 2 秒后自动消失
+  useEffect(() => {
+    if (toast === null) return
+    const t = setTimeout(() => setToast(null), 2000)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  /** 分享房间：优先系统分享面板，不支持或失败则复制邀请短链 */
+  async function shareRoom() {
+    const link = inviteLink(room)
+    if (typeof navigator.share === 'function') {
+      try {
+        await navigator.share({
+          title: name ?? '雨课堂签到房间',
+          text: `加入我的签到房间 ${room}`,
+          url: link,
+        })
+        return
+      } catch (e) {
+        // 用户主动取消分享（AbortError）不再复制；其它异常回退到复制
+        if (e instanceof DOMException && e.name === 'AbortError') return
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(link)
+      setToast('邀请链接已复制')
+    } catch {
+      setToast(link)
+    }
+  }
 
   return (
     <>
@@ -609,12 +651,12 @@ function InRoomView() {
         <MessageStream />
       </div>
 
-      {/* 底栏：扫码 + 粘贴 */}
+      {/* 底栏：扫码（主位）+ 分享房间 */}
       <div className="border-t border-hairline bg-canvas px-4 py-3">
         <div className="mx-auto flex max-w-2xl gap-2">
           <button
             type="button"
-            onClick={() => setShareMode('scan')}
+            onClick={() => setScanning(true)}
             className="flex flex-1 items-center justify-center gap-2 rounded-xl border-2 border-dashed border-brand-pink/40 bg-brand-pink/5 px-4 py-3 text-sm font-medium text-brand-pink transition-all hover:border-brand-pink/60 hover:bg-brand-pink/10 active:scale-[0.98]"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -624,17 +666,27 @@ function InRoomView() {
           </button>
           <button
             type="button"
-            onClick={() => setShareMode('paste')}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl border-2 border-dashed border-brand-teal/40 bg-brand-teal/5 px-4 py-3 text-sm font-medium text-brand-teal transition-all hover:border-brand-teal/60 hover:bg-brand-teal/10 active:scale-[0.98]"
+            onClick={() => void shareRoom()}
+            aria-label="分享房间"
+            title="分享房间"
+            className="flex w-14 shrink-0 items-center justify-center rounded-xl border-2 border-dashed border-brand-teal/40 bg-brand-teal/5 text-brand-teal transition-all hover:border-brand-teal/60 hover:bg-brand-teal/10 active:scale-[0.98]"
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect width="8" height="4" x="8" y="2" rx="1" />
-              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+              <path d="m16 6-4-4-4 4" />
+              <path d="M12 2v13" />
             </svg>
-            粘贴推送
           </button>
         </div>
       </div>
+
+      {toast !== null && (
+        <div className="fixed inset-x-0 bottom-24 z-50 flex justify-center px-4">
+          <p className="max-w-full truncate rounded-full bg-ink px-4 py-2 text-sm text-on-primary shadow-lg">
+            {toast}
+          </p>
+        </div>
+      )}
 
       {showSettings && (
         <SettingsPanel
@@ -643,12 +695,16 @@ function InRoomView() {
           onClose={() => setShowSettings(false)}
         />
       )}
-      {shareMode !== null && <ShareDialog mode={shareMode} onClose={() => setShareMode(null)} />}
+      {scanning && <ScanOverlay onClose={() => setScanning(false)} />}
     </>
   )
 }
 
+/** 路由 /r/{房间号}：已在目标房间 → 房间页；否则申请加入；房号非法兜底 */
 export default function Room() {
+  const { roomId } = useParams<{ roomId: string }>()
+  const id = Number(roomId)
+  const valid = Number.isInteger(id) && id > 0
   const room = useRoom((s) => s.room)
 
   useEffect(() => {
@@ -657,27 +713,22 @@ export default function Room() {
 
   return (
     <div className="flex h-screen flex-col bg-canvas">
-      {room === null ? (
-        // 直接访问 /room 未加入任何房间 → 空态引导回广场
-        <>
-          <header className="flex items-center justify-between border-b border-hairline bg-canvas px-4 py-3">
-            <h1 className="text-lg font-bold text-ink">分享房间</h1>
-          </header>
-          <div className="flex flex-1 items-center justify-center px-4">
-            <div className="w-full max-w-sm rounded-lg bg-surface-card p-8 text-center">
-              <p className="text-lg font-medium text-ink">尚未加入房间</p>
-              <p className="mt-1 text-sm text-muted">到广场加入一个公开房间，或创建自己的房间</p>
-              <Link
-                to="/"
-                className="mt-4 inline-flex w-full items-center justify-center rounded-md bg-ink px-5 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-ink-active"
-              >
-                去广场
-              </Link>
-            </div>
+      {!valid ? (
+        <div className="flex flex-1 items-center justify-center px-4">
+          <div className="w-full max-w-sm rounded-lg bg-surface-card p-8 text-center">
+            <p className="text-lg font-medium text-ink">邀请链接无效</p>
+            <Link
+              to="/"
+              className="mt-4 inline-flex w-full items-center justify-center rounded-md bg-ink px-5 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-ink-active"
+            >
+              去广场
+            </Link>
           </div>
-        </>
-      ) : (
+        </div>
+      ) : room === id ? (
         <InRoomView />
+      ) : (
+        <JoinView id={id} />
       )}
     </div>
   )
