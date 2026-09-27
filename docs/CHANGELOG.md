@@ -11,6 +11,8 @@
 - 创建房间对话框数值输入框无法删空重输：原 `Number(e.target.value) || 默认值` 使清空（空串 → 0 → falsy）立即回弹为默认值；改为字符串态保存、输入期间不校验不回弹，仅在提交时统一校验
 
 ### Changed
+- 房间页底栏：微信内置浏览器下于相机扫码按钮上方新增「微信扫一扫」主按钮（`docs/SPEC.md` §3.2.2 首选方案），结果与相机扫码同路径（本地预校验 → `share_qr` 推送全房间）；非微信环境或微信侧不可用（未配置公众号 40307 / 签名失败 / 未注入 wx）时保持并提示回退相机扫码
+- `.env.example`：新增 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 占位（M5 微信内扫码；留空则微信内自动降级为相机扫码）
 - `startQrScan` 的 `onDetected` 回调返回值改为 `boolean`：`true` 表示接受结果并停止扫描，`false` 表示内容无效、继续扫描——调用方（`ScanOverlay`）在返回 `false` 时展示错误提示而不中断扫码
 - 广场点击房间卡片「扫描二维码」/「加入房间」对话框提交后不进入房间页：三个加入入口统一等待 `joined` 帧后跳转（此前仅创建路径标记了加入意图）；若目标房间已在房间内则直接进入；取消对话框即清除意图
 - SharedWorker 内引用 `window` 导致静默崩溃、WS 从未建立（页面永远无法进入房间）：`wsUrl()` 与默认定时器改用 `globalThis`（worker 环境无 `window`）；注意 worker 代码更新后需关闭所有引用标签页才会重载
@@ -20,6 +22,8 @@
 - 创建房间对话框「填写课程信息（可选）」折叠开关增加展开箭头：折叠时箭头周期性轻微下沉（`animate-hint-bounce`）提示可展开，展开后旋转 180°
 
 ### Added
+- 微信 JS-SDK 扫码签到（M5）后端 `backend/src/wechat/`：`GET /api/wechat/jssdk-signature?url=` 返回 `{appId,timestamp,nonceStr,signature}`；`WechatClient` 内存缓存 `access_token` / `jsapi_ticket`（默认 7200s，提前 300s 刷新；`tokio::sync::RwLock` 保证不跨 `await` 持锁），签名串 `jsapi_ticket=..&noncestr=..&timestamp=..&url=..` 取 **plain SHA1**（新增 `sha1` 依赖），`url` 自动去除 `#` 及其后部分；公众号凭证经 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 注入，未配置时返回 40307（不 panic）
+- 微信 JS-SDK 扫码签到（M5）前端：`frontend/src/lib/wechat.ts`（`MicroMessenger` UA 检测、jweixin 1.6.0 动态注入且幂等复用、`wx.config` → `wx.scanQRCode` 封装，用户取消返回 `null`）与 `frontend/src/api/wechat.ts`（签名获取）
 - 查看当前课程（F5，M4）后端 `backend/src/courses/`：`GET /api/courses` 实时透传雨课堂「正在上课」课程（`/api/v3/classroom/on-lesson` ∩ `/v/course_meta/learning_list/`，对齐 `course_helper` 的 `getCoursesList()`），本站不落库；上游会话失效（50000）映射为 40101 统一登录引导
 - 查看当前课程前端页面 `frontend/src/pages/Courses.tsx`：展示课程名 / 教师 / 课堂名（班级）/ 课程头像（无头像时以课程名首字兜底），支持手动刷新、加载/错误提示与无课程空态；导航栏新增「当前课程」入口（`/courses`）
 - 分享房间模块（F3，M3）后端 `backend/src/ws/`：`Hub` 内存态房间管理（创建/加入/密码校验+限速/成员列表/历史消息 FIFO≤100 条+有效期淘汰/自定义生命周期）；`GET /ws` 握手校验本站会话、单用户单连接（旧连接 close 4009）；`POST /api/rooms`、`DELETE /api/rooms/{id}`、`GET /api/plaza`；后台 sweep 任务（心跳假死判死、lobby 空闲 10 分钟回收 close 4000、消息频率超限 close 4008、房间到期/14 天无消息回收）

@@ -19,6 +19,7 @@ use super::token;
 use super::yk_client::{self, YkClient};
 use crate::config::Config;
 use crate::error::AppError;
+use crate::wechat::client::WechatClient;
 
 pub const SESSION_COOKIE: &str = "sid";
 
@@ -26,6 +27,8 @@ pub const SESSION_COOKIE: &str = "sid";
 pub struct AppState {
     pub config: Config,
     pub yk: YkClient,
+    /// 微信 JS-SDK 客户端（M5）：access_token / jsapi_ticket 内存缓存
+    pub wechat: WechatClient,
     /// user_id → 雨课堂 Cookie 头（内存态，重启即失）
     pub sessions: RwLock<HashMap<i64, String>>,
     /// WS 房间 Hub（docs/DESIGN.md §4，内存态）
@@ -33,12 +36,17 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// 统一构造（Hub 使用配置中的 limits）
+    /// 统一构造（Hub 使用配置中的 limits；微信凭证来自配置，未配置则相关接口报 40307）
     pub fn new(config: Config, yk: YkClient) -> Self {
         let hub = Arc::new(crate::ws::hub::Hub::new(config.limits.clone()));
+        let wechat = WechatClient::new(
+            config.wechat_app_id.clone(),
+            config.wechat_app_secret.clone(),
+        );
         Self {
             config,
             yk,
+            wechat,
             sessions: RwLock::new(HashMap::new()),
             hub,
         }
@@ -245,6 +253,8 @@ mod tests {
                 yk_allowed_hosts: vec!["www.yuketang.cn".into()],
                 limits: Default::default(),
                 log_dir: "logs".into(),
+                wechat_app_id: None,
+                wechat_app_secret: None,
             },
             YkClient::new(yk_base),
         )))
@@ -427,6 +437,8 @@ mod tests {
                 yk_allowed_hosts: vec![],
                 limits: Default::default(),
                 log_dir: "logs".into(),
+                wechat_app_id: None,
+                wechat_app_secret: None,
             },
             YkClient::new(&server.uri()),
         ));

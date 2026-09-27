@@ -2,7 +2,7 @@
 // 已在目标房间 → 直接渲染房间页；否则先申请加入（密码房弹密码框，joined 后切到房间页）——刷新不会丢房间
 // 顶栏：左返回 / 正中房间名（大字）+ 房号（小字）/ 右设置
 // 中间：接收的签到码消息流（默认点击 URL 框才签到）
-// 底栏：全屏扫码分享（左下角相册可上传图片本地识别）+ 分享房间
+// 底栏：扫码分享（微信内优先「微信扫一扫」，非微信/失败用全屏相机，左下角相册可本地识别图片）+ 分享房间
 // 设置抽屉：房间信息、成员、「收到消息立即签到」开关、离开/关闭房间
 
 import { useEffect, useRef, useState } from 'react'
@@ -10,9 +10,11 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { closeRoom } from '../api/room'
 import { submitSign } from '../api/sign'
+import { fetchJssdkSignature } from '../api/wechat'
 import { decodeQrFromImage, startQrScan, type ScannerHandle } from '../lib/qr-scan'
 import { inviteLink } from '../lib/room-link'
 import { isYuketangSignUrl } from '../lib/sign-url'
+import { isWechatBrowser, wechatScanQrCode } from '../lib/wechat'
 import { useNow } from '../lib/use-now'
 import { useAuth } from '../stores/auth'
 import { useRoom } from '../stores/room'
@@ -580,7 +582,10 @@ function InRoomView() {
   const [autoSign, setAutoSign] = useAutoSign()
   const [showSettings, setShowSettings] = useState(false)
   const [scanning, setScanning] = useState(false)
+  const [wxScanning, setWxScanning] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  /** 微信内才展示「微信扫一扫」主按钮（非微信环境保持相机扫码） */
+  const inWechat = isWechatBrowser()
 
   // 自动签到：监听 qr_update 新消息，开启时立即提交（去重，只签一次）
   const signedRef = useRef(new Set<string>())
@@ -639,6 +644,29 @@ function InRoomView() {
     }
   }
 
+  /** 微信内「扫一扫」：签名 → wx.config → scanQRCode，结果与相机扫码同路径推送全房间 */
+  async function wechatScan() {
+    if (wxScanning) return
+    setWxScanning(true)
+    setToast(null)
+    try {
+      const signature = await fetchJssdkSignature(globalThis.location.href)
+      const raw = (await wechatScanQrCode(signature))?.trim()
+      if (!raw) return // 用户取消
+      if (!isYuketangSignUrl(raw)) {
+        setToast(INVALID_QR_TEXT)
+        return
+      }
+      pushQr(raw)
+      setToast('已推送到房间')
+    } catch (e) {
+      // 后端未配置公众号（40307）或微信侧校验失败 → 提示改用相机扫码
+      setToast(e instanceof ApiError ? e.message : '微信扫一扫不可用，请改用相机扫码')
+    } finally {
+      setWxScanning(false)
+    }
+  }
+
   return (
     <>
       {/* 顶栏：左返回 / 中房间名（大字）+ 房号（小字）/ 右设置 */}
@@ -675,8 +703,21 @@ function InRoomView() {
         <MessageStream />
       </div>
 
-      {/* 底栏：扫码（主位）+ 分享房间 */}
+      {/* 底栏：微信内「微信扫一扫」主位 + 相机扫码 + 分享房间 */}
       <div className="border-t border-hairline bg-canvas px-4 py-3">
+        {inWechat && (
+          <button
+            type="button"
+            onClick={() => void wechatScan()}
+            disabled={wxScanning}
+            className="mx-auto mb-2 flex w-full max-w-2xl items-center justify-center gap-2 rounded-xl bg-brand-teal px-4 py-3 text-sm font-semibold text-on-primary transition-colors hover:bg-brand-teal/90 disabled:opacity-60"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10" />
+            </svg>
+            {wxScanning ? '正在调用微信扫一扫…' : '微信扫一扫'}
+          </button>
+        )}
         <div className="mx-auto flex max-w-2xl gap-2">
           <button
             type="button"
