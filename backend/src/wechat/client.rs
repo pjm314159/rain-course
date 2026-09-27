@@ -81,6 +81,11 @@ impl WechatClient {
         }
     }
 
+    /// 是否已配置公众号凭证（前端据此决定是否展示微信内扫码入口）
+    pub fn configured(&self) -> bool {
+        self.app_id.is_some() && self.app_secret.is_some()
+    }
+
     /// 生成 JS-SDK 签名；`url` 为当前页面完整 URL（`#` 之后部分会被去除）
     pub async fn jssdk_signature(&self, url: &str) -> Result<JssdkSignature, AppError> {
         let app_id = self.app_id.clone().ok_or(AppError::WechatNotConfigured)?;

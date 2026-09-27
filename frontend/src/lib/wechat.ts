@@ -69,13 +69,18 @@ export function loadJweixin(): Promise<WechatJsSdk> {
   return promise
 }
 
+/** 真机排查 invalid signature：VITE_WX_DEBUG=true 时打开 wx.config 的 debug 弹窗 */
+function wxDebugEnabled(): boolean {
+  return import.meta.env.VITE_WX_DEBUG === 'true'
+}
+
 /** 微信「扫一扫」：config → ready 后调用 scanQRCode；用户取消返回 null */
 export async function wechatScanQrCode(signature: JssdkSignature): Promise<string | null> {
   const wx = await loadJweixin()
 
   await new Promise<void>((resolve, reject) => {
     wx.config({
-      debug: false,
+      debug: wxDebugEnabled(),
       appId: signature.appId,
       timestamp: signature.timestamp,
       nonceStr: signature.nonceStr,

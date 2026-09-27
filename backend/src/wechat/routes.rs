@@ -1,7 +1,8 @@
-//! 微信 JS-SDK 签名路由：`GET /api/wechat/jssdk-signature?url=`（M5）
+//! 微信 JS-SDK 路由（M5）
 //!
-//! 微信内扫码前置：前端拿到签名后 `wx.config`，再 `wx.scanQRCode`。
-//! 需本站会话；未配置公众号凭证时返回 40307（前端自动降级为相机扫码）。
+//! - `GET /api/wechat/status`：可用性探测（无需会话），前端据此决定是否展示微信内扫码入口
+//! - `GET /api/wechat/jssdk-signature?url=`：签名（需本站会话），供前端 `wx.config` 后
+//!   `wx.scanQRCode`；未配置公众号凭证返回 40307（前端自动降级为相机扫码）
 
 use std::sync::Arc;
 
@@ -19,8 +20,24 @@ use crate::error::AppError;
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/api/wechat/status", get(wechat_status))
         .route("/api/wechat/jssdk-signature", get(jssdk_signature))
         .with_state(state)
+}
+
+/// 可用性探测：只暴露「是否已配置」，不含任何凭证信息；前端据此决定是否渲染微信内扫码入口
+async fn wechat_status(State(st): State<Arc<AppState>>) -> Response {
+    let available = st.wechat.configured();
+    let reason = if available {
+        None
+    } else {
+        Some("未配置 WECHAT_APP_ID / WECHAT_APP_SECRET")
+    };
+    Json(json!({
+        "code": 0, "msg": "ok",
+        "data": { "available": available, "reason": reason }
+    }))
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -134,6 +151,40 @@ mod tests {
             })))
             .mount(server)
             .await;
+    }
+
+    #[tokio::test]
+    async fn status_reports_available_when_configured() {
+        // status 不访问上游，用固定 base 即可
+        let resp = get(
+            app_with("https://api.weixin.qq.com", true),
+            "/api/wechat/status",
+            None,
+        )
+        .await;
+        let v = body_json(resp).await;
+        assert_eq!(v["code"], 0);
+        assert_eq!(v["data"]["available"], true);
+        assert_eq!(v["data"]["reason"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn status_reports_reason_when_unconfigured() {
+        let resp = get(
+            app_with("https://api.weixin.qq.com", false),
+            "/api/wechat/status",
+            None,
+        )
+        .await;
+        let v = body_json(resp).await;
+        assert_eq!(v["code"], 0);
+        assert_eq!(v["data"]["available"], false);
+        assert!(
+            v["data"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("未配置 WECHAT_APP_ID")
+        );
     }
 
     #[tokio::test]

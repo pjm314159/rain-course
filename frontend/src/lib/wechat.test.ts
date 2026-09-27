@@ -58,6 +58,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setWx(undefined)
+  vi.unstubAllEnvs()
   vi.restoreAllMocks()
 })
 
@@ -159,5 +160,22 @@ describe('wechatScanQrCode', () => {
     await expect(wechatScanQrCode(SIGNATURE)).rejects.toThrow(
       'scanQRCode:fail permission denied',
     )
+  })
+
+  it('默认 debug 关闭', async () => {
+    const { wechatScanQrCode } = await freshModule()
+    const wx = fakeWx({ result: 'https://a.cn/c/1' })
+    setWx(wx)
+    await wechatScanQrCode(SIGNATURE)
+    expect(wx.config).toHaveBeenCalledWith(expect.objectContaining({ debug: false }))
+  })
+
+  it('VITE_WX_DEBUG=true 时打开 debug 弹窗', async () => {
+    vi.stubEnv('VITE_WX_DEBUG', 'true')
+    const { wechatScanQrCode } = await freshModule()
+    const wx = fakeWx({ result: 'https://a.cn/c/1' })
+    setWx(wx)
+    await wechatScanQrCode(SIGNATURE)
+    expect(wx.config).toHaveBeenCalledWith(expect.objectContaining({ debug: true }))
   })
 })

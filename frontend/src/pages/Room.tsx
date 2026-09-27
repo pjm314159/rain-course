@@ -10,7 +10,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { closeRoom } from '../api/room'
 import { submitSign } from '../api/sign'
-import { fetchJssdkSignature } from '../api/wechat'
+import { fetchJssdkSignature, fetchWechatStatus } from '../api/wechat'
 import { decodeQrFromImage, startQrScan, type ScannerHandle } from '../lib/qr-scan'
 import { inviteLink } from '../lib/room-link'
 import { isYuketangSignUrl } from '../lib/sign-url'
@@ -583,9 +583,18 @@ function InRoomView() {
   const [showSettings, setShowSettings] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [wxScanning, setWxScanning] = useState(false)
+  const [wxAvailable, setWxAvailable] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   /** 微信内才展示「微信扫一扫」主按钮（非微信环境保持相机扫码） */
   const inWechat = isWechatBrowser()
+
+  // 环境预检查：仅当后端确实配置了公众号时才展示微信内扫码入口，避免点了才报错
+  useEffect(() => {
+    if (!inWechat) return
+    fetchWechatStatus()
+      .then((s) => setWxAvailable(s.available))
+      .catch(() => setWxAvailable(false))
+  }, [inWechat])
 
   // 自动签到：监听 qr_update 新消息，开启时立即提交（去重，只签一次）
   const signedRef = useRef(new Set<string>())
@@ -705,7 +714,7 @@ function InRoomView() {
 
       {/* 底栏：微信内「微信扫一扫」主位 + 相机扫码 + 分享房间 */}
       <div className="border-t border-hairline bg-canvas px-4 py-3">
-        {inWechat && (
+        {inWechat && wxAvailable && (
           <button
             type="button"
             onClick={() => void wechatScan()}
