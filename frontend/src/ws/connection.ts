@@ -52,8 +52,9 @@ export interface WsConnectionOptions {
 const defaultFactory: SocketFactory = (url) => new WebSocket(url) as unknown as WsSocketLike
 
 const defaultSchedule = (fn: () => void, ms: number) => {
-  const t = window.setTimeout(fn, ms)
-  return () => window.clearTimeout(t)
+  // globalThis 而非 window：连接也活在 SharedWorker 里，那里没有 window
+  const t = globalThis.setTimeout(fn, ms)
+  return () => globalThis.clearTimeout(t)
 }
 
 export class WsConnection {

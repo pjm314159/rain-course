@@ -88,11 +88,12 @@ export function encodeClientMsg(msg: ClientMsg): string {
   return JSON.stringify(msg)
 }
 
-/** ws(s)://<host>/ws：同源部署（nginx 反代）直接用 location */
+/** ws(s)://<host>/ws：同源部署（nginx 反代）直接用 location。
+ *  必须用 globalThis 而非 window——连接也活在 SharedWorker 里，那里没有 window */
 export function wsUrl(): string {
   if (config.apiBaseUrl) {
     return `${config.apiBaseUrl.replace(/^http/, 'ws')}/ws`
   }
-  const { protocol, host } = window.location
+  const { protocol, host } = globalThis.location
   return `${protocol.replace(/^http/, 'ws')}//${host}/ws`
 }
