@@ -60,21 +60,22 @@ describe('Plaza 广场页', () => {
     expect(screen.queryByText('英语角')).toBeNull()
   })
 
-  it('点击卡片打开详情对话框且只有一个「扫描二维码」按钮', async () => {
+  it('点击卡片打开详情对话框，主按钮为「加入房间」', async () => {
     renderPlaza()
     await screen.findByText('周一高数课')
     await userEvent.click(screen.getByText('周一高数课'))
-    expect(await screen.findByText('扫描二维码')).toBeTruthy()
-    expect(screen.getAllByRole('button', { name: '扫描二维码' })).toHaveLength(1)
+    // 底部操作条与详情对话框各有一个「加入房间」（对话框按钮在 DOM 中靠后）
+    expect(await screen.findAllByRole('button', { name: '加入房间' })).toHaveLength(2)
     // 仅打开对话框不发起加入
     expect(getWs().send).not.toHaveBeenCalled()
   })
 
-  it('详情对话框点击「扫描二维码」发送 join', async () => {
+  it('详情对话框点击「加入房间」发送 join', async () => {
     renderPlaza()
     await screen.findByText('周一高数课')
     await userEvent.click(screen.getByText('周一高数课'))
-    await userEvent.click(await screen.findByRole('button', { name: '扫描二维码' }))
+    const joinButtons = await screen.findAllByRole('button', { name: '加入房间' })
+    await userEvent.click(joinButtons[1])
     await waitFor(() =>
       expect(getWs().send).toHaveBeenCalledWith({ type: 'join', room: 123456 }),
     )

@@ -38,6 +38,7 @@
   --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --animate-slide-down: slideDown 0.2s ease-out;
   --animate-slide-up-sm: slideUpSm 0.2s ease-out;
+  --animate-hint-bounce: hintBounce 1.8s ease-in-out infinite;
 
   @keyframes fadeIn {
     0% { opacity: 0; }
@@ -57,6 +58,13 @@
   @keyframes slideUpSm {
     0% { transform: translateY(8px); opacity: 0; }
     100% { transform: translateY(0); opacity: 1; }
+  }
+
+  /* 折叠区提示：箭头周期性轻微下沉，暗示可以展开 */
+  @keyframes hintBounce {
+    0%, 55%, 100% { transform: translateY(0); }
+    70% { transform: translateY(4px); }
+    85% { transform: translateY(0); }
   }
 }
 

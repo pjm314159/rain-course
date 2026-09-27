@@ -1,5 +1,5 @@
 // 广场页：首次 GET /api/plaza + WS plaza_update 实时覆盖（docs/DESIGN.md §4.3）
-// 交互流：搜索过滤 → 点卡片弹详情 →「扫描二维码」申请加入（needPassword 时补密码）→ joined 后进入房间页
+// 交互流：搜索过滤 → 点卡片弹详情 →「加入房间」申请加入（needPassword 时补密码）→ joined 后进入房间页
 // 创建/加入房间通过底部操作条弹窗完成（弹窗样式参照 qrcode_share 的 PasswordModal）
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -34,7 +34,7 @@ function metaLine(meta: RoomMeta | undefined): string | null {
   return line || null
 }
 
-/** 详情对话框：房间信息 + 唯一主按钮「扫描二维码」申请加入（needPassword 时改出密码框） */
+/** 详情对话框：房间信息 + 唯一主按钮「加入房间」申请加入（needPassword 时改出密码框） */
 function DetailDialog({
   room,
   error,
@@ -95,7 +95,7 @@ function DetailDialog({
         <>
           {error && <p className="mt-3 text-sm text-error">{error}</p>}
           <button type="button" className={btnPrimaryCls + ' mt-4'} onClick={requestJoin}>
-            扫描二维码
+            加入房间
           </button>
         </>
       )}
@@ -276,6 +276,20 @@ function CreateDialog({
           className="flex items-center gap-1 text-sm text-muted transition-colors hover:text-ink"
           onClick={() => setAdvanced(!advanced)}
         >
+          {/* 展开箭头：折叠时轻微下沉提示可展开，展开后旋转 180° */}
+          <svg
+            className={`h-4 w-4 shrink-0 transition-transform duration-200 ${
+              advanced ? 'rotate-180' : 'animate-hint-bounce'
+            }`}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
           {advanced ? '收起课程信息' : '填写课程信息（可选）'}
         </button>
         {advanced && (
