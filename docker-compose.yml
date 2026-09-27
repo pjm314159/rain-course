@@ -1,0 +1,55 @@
+# ============================================================
+# rain-course 一键部署（docs/DESIGN.md §8）
+#
+# 首次部署：
+#   cp .env.example .env          # 并把 SERVER_SECRET 改成随机串（必改）
+#   docker compose up -d --build
+#
+# 端口：对外只暴露 80，TLS 交给前置反代终结（容器内终结 TLS 见 frontend/nginx.conf 末尾注释）。
+# 内存：2 核 2G 机器按 DESIGN §8 限制各容器上限；建议宿主再开 swap 兜底（见 README 部署章节）。
+# ============================================================
+
+services:
+  backend:
+    build:
+      context: ./backend
+    image: rain-course-backend:latest
+    # 后端配置（SERVER_SECRET / YK_* / WECHAT_* / WS_* 等）全部来自根 .env
+    env_file:
+      - .env
+    environment:
+      LOG_DIR: /app/logs
+    # 只走容器内网络，不映射到宿主机
+    expose:
+      - "3000"
+    volumes:
+      - logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 512m
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      # 构建期变量打进前端产物；仓库只留 .env.example 模板，具体值只存在部署机 .env
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        VITE_CAPTCHA_APP_ID: ${VITE_CAPTCHA_APP_ID:-2091064951}
+        VITE_ICP_BEIAN: ${VITE_ICP_BEIAN:-}
+        VITE_WX_DEBUG: ${VITE_WX_DEBUG:-}
+    image: rain-course-frontend:latest
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    mem_limit: 128m
+    restart: unless-stopped
+
+volumes:
+  logs:

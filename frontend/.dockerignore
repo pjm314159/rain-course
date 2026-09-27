@@ -1,0 +1,6 @@
+# 构建上下文只需要源码与清单；本地 .env* 不进镜像（构建期变量由 build.args 注入）
+node_modules
+dist
+.pnpm-store
+.env
+.env.*
