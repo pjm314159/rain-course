@@ -20,6 +20,7 @@
 - 创建房间对话框「填写课程信息（可选）」折叠开关增加展开箭头：折叠时箭头周期性轻微下沉（`animate-hint-bounce`）提示可展开，展开后旋转 180°
 
 ### Added
+- 可选 ICP 备案号页脚（`frontend/src/components/IcpFooter.tsx`）：仅当部署方配置 `VITE_ICP_BEIAN` 时渲染（链接工信部 `beian.miit.gov.cn`），未配置时零 DOM 痕迹；页脚挂在登录页，号码只写在部署机 `frontend/.env.local`（已 gitignore），仓库与开源发布不含任何具体号码，保证可随时 `git pull` 更新
 - 查看当前课程（F5，M4）后端 `backend/src/courses/`：`GET /api/courses` 实时透传雨课堂「正在上课」课程（`/api/v3/classroom/on-lesson` ∩ `/v/course_meta/learning_list/`，对齐 `course_helper` 的 `getCoursesList()`），本站不落库；上游会话失效（50000）映射为 40101 统一登录引导
 - 查看当前课程前端页面 `frontend/src/pages/Courses.tsx`：展示课程名 / 教师 / 课堂名（班级）/ 课程头像（无头像时以课程名首字兜底），支持手动刷新、加载/错误提示与无课程空态；导航栏新增「当前课程」入口（`/courses`）
 - 分享房间模块（F3，M3）后端 `backend/src/ws/`：`Hub` 内存态房间管理（创建/加入/密码校验+限速/成员列表/历史消息 FIFO≤100 条+有效期淘汰/自定义生命周期）；`GET /ws` 握手校验本站会话、单用户单连接（旧连接 close 4009）；`POST /api/rooms`、`DELETE /api/rooms/{id}`、`GET /api/plaza`；后台 sweep 任务（心跳假死判死、lobby 空闲 10 分钟回收 close 4000、消息频率超限 close 4008、房间到期/14 天无消息回收）
