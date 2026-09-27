@@ -36,21 +36,26 @@ function metaLine(meta: RoomMeta | undefined): string | null {
 function DetailDialog({
   room,
   error,
+  onJoinIntent,
   onClose,
 }: {
   room: PlazaRoom
   error: string | null
+  /** 发起加入即标记，joined 帧到达后由父组件统一跳转 */
+  onJoinIntent: () => void
   onClose: () => void
 }) {
   const needPassword = useRoom((s) => s.needPassword)
   const [password, setPassword] = useState('')
 
   function requestJoin() {
+    onJoinIntent()
     getWs().send({ type: 'join', room: room.room_id })
   }
 
   function submitPassword(e: React.FormEvent) {
     e.preventDefault()
+    onJoinIntent()
     getWs().send({ type: 'join', room: room.room_id, password: password.trim() || undefined })
   }
 
@@ -236,7 +241,16 @@ function CreateDialog({
 }
 
 /** 加入对话框：JoinForm 逻辑迁入（房间号 + needPassword 时密码框） */
-function JoinDialog({ error, onClose }: { error: string | null; onClose: () => void }) {
+function JoinDialog({
+  error,
+  onJoinIntent,
+  onClose,
+}: {
+  error: string | null
+  /** 发起加入即标记（带输入的房间号），joined 帧到达后由父组件统一跳转 */
+  onJoinIntent: (target: number) => void
+  onClose: () => void
+}) {
   const needPassword = useRoom((s) => s.needPassword)
   const [room, setRoom] = useState('')
   const [password, setPassword] = useState('')
@@ -245,6 +259,7 @@ function JoinDialog({ error, onClose }: { error: string | null; onClose: () => v
   function submit(e: React.FormEvent) {
     e.preventDefault()
     if (!Number.isInteger(roomId) || roomId <= 0) return
+    onJoinIntent(roomId)
     getWs().send({ type: 'join', room: roomId, password: password.trim() || undefined })
   }
 
@@ -344,10 +359,29 @@ export default function Plaza() {
     getWs().ensureConnected()
   }
 
-  /** 创建成功后由对话框回调：记录加入意图并关闭，等待 joined 帧后跳转 */
+  /** 创建成功后由对话框回调：标记加入意图并关闭，等待 joined 帧后跳转 */
   function markJoinPending() {
     joinPendingRef.current = true
     setShowCreate(false)
+  }
+
+  /** 详情/加入对话框发起加入：仅标记（对话框保持打开展示密码框/错误）；若已在该房间内则直接进入 */
+  function joinIntent(target?: number) {
+    if (target !== undefined && useRoom.getState().room === target) {
+      navigate('/room')
+      return
+    }
+    joinPendingRef.current = true
+  }
+
+  function closeDetail() {
+    joinPendingRef.current = false
+    setDetailRoom(null)
+  }
+
+  function closeJoin() {
+    joinPendingRef.current = false
+    setShowJoin(false)
   }
 
   return (
@@ -433,13 +467,18 @@ export default function Plaza() {
 
       {/* 对话框（条件渲染，卸载即清理；40404 时统一收起） */}
       {detailRoom !== null && !roomClosed && (
-        <DetailDialog room={detailRoom} error={dialogError} onClose={() => setDetailRoom(null)} />
+        <DetailDialog
+          room={detailRoom}
+          error={dialogError}
+          onJoinIntent={() => joinIntent(detailRoom.room_id)}
+          onClose={closeDetail}
+        />
       )}
       {showCreate && !roomClosed && (
         <CreateDialog onClose={() => setShowCreate(false)} onProceed={markJoinPending} />
       )}
       {showJoin && !roomClosed && (
-        <JoinDialog error={dialogError} onClose={() => setShowJoin(false)} />
+        <JoinDialog error={dialogError} onJoinIntent={joinIntent} onClose={closeJoin} />
       )}
     </main>
   )

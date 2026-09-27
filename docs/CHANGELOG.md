@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- 刷新后误跳登录页（疑似"cookie 未存储"）：根因是启动探测竞态——`/api/auth/me` 尚未返回时 `RequireAuth` 已按未登录跳转且无人跳回；现在探测期间不判定登录态，探测结束才决定是否跳转
+- 广场点击房间卡片「扫描二维码」/「加入房间」对话框提交后不进入房间页：三个加入入口统一等待 `joined` 帧后跳转（此前仅创建路径标记了加入意图）；若目标房间已在房间内则直接进入；取消对话框即清除意图
+
 ### Added
 - 分享房间模块（F3，M3）后端 `backend/src/ws/`：`Hub` 内存态房间管理（创建/加入/密码校验+限速/成员列表/历史消息 FIFO≤100 条+有效期淘汰/自定义生命周期）；`GET /ws` 握手校验本站会话、单用户单连接（旧连接 close 4009）；`POST /api/rooms`、`DELETE /api/rooms/{id}`、`GET /api/plaza`；后台 sweep 任务（心跳假死判死、lobby 空闲 10 分钟回收 close 4000、消息频率超限 close 4008、房间到期/14 天无消息回收）
 - 分享房间前端 WS 客户端 `frontend/src/ws/`：协议类型与后端 `models.rs` 对齐（信封 `{type,seq,...}`、error 码表）；单连接状态机 idle/connecting/lobby/reconnecting/in_room/closed——心跳自动 pong、意外断开指数退避重连 1s→30s、重连自动 rejoin（joined 全量补齐）、4000/4008/4009 与 error 40404 不重连；SharedWorker 多标签页单连接复用，降级 BroadcastChannel + localStorage 选主（TTL 4s，leader 直驱连接规避不回显问题）

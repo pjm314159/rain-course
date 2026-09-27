@@ -9,10 +9,12 @@ import Plaza from './pages/Plaza'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const userId = useAuth((s) => s.userId)
+  const probing = useAuth((s) => s.probing)
   const navigate = useNavigate()
   useEffect(() => {
-    if (userId === null) void navigate('/login', { replace: true })
-  }, [userId, navigate])
+    // 仅在探测结束后仍未登录才跳转；探测期间渲染空白等待结果
+    if (userId === null && !probing) void navigate('/login', { replace: true })
+  }, [userId, probing, navigate])
   if (userId === null) return null
   return <>{children}</>
 }
