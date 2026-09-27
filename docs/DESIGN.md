@@ -1,7 +1,7 @@
 # 雨课堂签到助手 技术设计（DESIGN）
 
-> 版本：v0.3
-> 日期：2026-09-26
+> 版本：v0.1.0
+> 日期：2026-09-27
 > 对应需求：[SPEC.md](./SPEC.md)
 > 接口细节来源：`course_helper/lib/api/`（源码分析确认）
 
@@ -18,12 +18,12 @@
 | 会话 | 签名 cookie（`axum-extra` `PrivateCookieJar`，HMAC 防篡改，14 天滑动续期；校验只验签名，无服务端状态） |
 | 错误 | `thiserror` + `anyhow` |
 | 前端 | Vite `react-ts` + `react-router` + `zustand` + TailwindCSS；包管理器 **pnpm** |
-| 扫码 | 相机：`BarcodeDetector` 特性检测 → 降级 `@zxing/browser`；图片：`BarcodeDetector` → `jsQR`（相机与图片均在浏览器本地解码，实测 zxing 静态图解码对整数倍缩放的二维码会失败）；微信内走 JS-SDK |
+| 扫码 | 相机与图片统一：`BarcodeDetector` 特性检测 → 降级 `jsQR`（均在浏览器本地解码，图片不上传服务器）；微信内走 JS-SDK。（曾用 `@zxing/browser` 兜底，实测对整数倍缩放的二维码漏检，已移除） |
 | WS 客户端 | 原生 WebSocket 封装（心跳、指数退避重连、房间状态机） |
-| 部署 | Docker Compose：`nginx:stable-alpine`（TLS + 静态 + 反代）+ axum 多阶段构建镜像 |
+| 部署 | Docker Compose：`nginx:stable-alpine`（静态 + 反代 + gzip）+ axum 多阶段构建镜像；对外只暴露 80，TLS 交前置反代终结 |
 | 存储 | **无数据库、无 Redis**。站点登录态 = 签名 cookie（无服务端存储）；雨课堂凭证、房间、二维码内容、WS 状态全内存，服务重启需重新登录（已接受的取舍） |
 
-2 核 2G 机器内存预算：Nginx ~10MB + axum ~50–80MB + WS 状态 <20MB，余量充足。
+本项目在 **2 核 2G** 的机器上开发与验证（该规格是开发环境，不是部署要求）：实测 Nginx ~10MB + axum ~50–80MB + WS 状态 <20MB，占用很低。
 
 ---
 
@@ -49,7 +49,7 @@
                     雨课堂服务端（外部接口）
 ```
 
-- Nginx 终结 TLS；`/ws` 反代需透传 `Upgrade`/`Connection` 头并调大读超时；
+- Nginx 提供前端静态资源与 `/api`、`/ws` 反代；对外只暴露 80，**TLS 由前置反代终结**；`/ws` 反代需透传 `Upgrade`/`Connection` 头并调大读超时；
 - 后端按上述模块划分 crate 内 module，不拆 workspace（规模不需要）。
 
 ---
@@ -70,18 +70,19 @@
 | GET | `/api/auth/me` | 当前登录态/用户信息（透传 `GET /v/course_meta/user_info`） |
 | GET | `/api/courses` | 正在上课的课程（F5，`on-lesson` ∩ `learning_list`） |
 | POST | `/api/sign/submit` | 提交二维码 URL（校验 → `scan` → `checkin`，见 §5） |
+| GET | `/api/wechat/status` | 微信公众号是否已配置（免会话）：`{available, reason}`，不含凭证；前端据此决定是否展示微信内扫码入口 |
 | GET | `/api/wechat/jssdk-signature?url=` | JS-SDK 签名（M5） |
-| POST | `/api/rooms` | 创建房间：`{name?, password?, qr_ttl_secs?(≤3600), meta?{course_name?, location?, teacher?, time?, class_name?}}` → `{room_id}` |
+| POST | `/api/rooms` | 创建房间：`{name, password?, qr_ttl_secs?(≤3600), lifetime_mins?, permanent?, meta?{course_name?, location?, teacher?, time?, class_name?}}` → `{room_id}`；`name` 必填（空名 40306），`lifetime_mins` 与 `permanent` 均缺省时默认 4 小时 |
 | DELETE | `/api/rooms/:id` | 房主关闭房间 |
 | GET | `/api/plaza` | 广场列表：仅无密码房间 `{room_id, name, members, created_at, meta?}` |
 
-鉴权：除 `/api/health`、`/api/auth/login` 外均需本站会话（cookie）。
+鉴权：除 `/api/health`、`/api/wechat/status` 与登录流程本身的接口（`/api/auth/login`、`/api/auth/sms/send`、`/api/auth/sms/verify`、`/api/auth/qrcode`、`/api/auth/qrcode/poll`）外，均需本站会话（cookie）。
 
 ---
 
 ## 4. WebSocket 协议
 
-连接：`wss://<host>/ws`，**握手时必须携带本站会话 cookie**，服务端在 upgrade 前校验，未登录直接拒绝（HTTP 401）。
+连接：`ws://<host>/ws`（前置反代终结 TLS 后即为 `wss://`），**握手时必须携带本站会话 cookie**，服务端在 upgrade 前校验，未登录直接拒绝（HTTP 401）。
 
 信封格式（JSON，UTF-8 文本帧）：
 
@@ -112,7 +113,7 @@ S→C error { code, msg }                            # 密码错误(限速)、�
 
 ```
 C→S share_qr { room, raw }                 # 扫码者推送二维码 URL（服务端先校验，见 §5）
-S→C qr_update { room, raw, by, expire_at } # 广播给房间内除发送者外的成员；expire_at = now + 房间 qr_ttl（默认 3600s）
+S→C qr_update { room, raw, by, expire_at } # 广播给房间内全部成员；expire_at = now + 房间 qr_ttl（默认 3600s）
 C→S sign_result { room, ok, reason? }      # 成员签到回执
 S→C member_join/member_leave { room, members[] }   # 全量成员列表同步（简单可靠）
 ```
@@ -121,7 +122,8 @@ S→C member_join/member_leave { room, members[] }   # 全量成员列表同步�
   - **入队时惰性淘汰**：push 前先从队头弹出已过期消息（消息按时间入队天然有序，队头必最旧，均摊 O(1)），再检查容量，超过 100 条删除最旧；
   - **不引入定时清理任务**：100 条上限已给出确定内存上界，定时扫描只省几十 KB 却增加锁竞争与代码路径；
   - 新加入/重连成员收到的 `joined.messages` 仅含未过期消息（每条带 `expire_at` 供前端倒计时）；
-- `qr_ttl_secs` 由房主创建时设定，服务端钳制在 `(0, 3600]` 秒。
+- `qr_ttl_secs` 由房主创建时设定，服务端钳制在 `[1, 3600]` 秒；
+- `qr_update` **也回显给发送者**（前端按 `raw + expire_at` 去重）：签到协作场景下发送者本人同样要在消息流里看到自己分享的码。
 
 ### 4.3 广场（F4）
 
@@ -169,22 +171,22 @@ raw 内容
 - **任何未通过校验的内容：直接返回业务错误，绝不发起任何出站请求**（SSRF 与钓鱼转发防线）；
 - 请求头按旧项目携带 `xtbz: ykt`、`x-client: app` 等；cookie 会话附 `x-csrftoken` / `x-uid` / `sessionid`（见 `api_service.dart`、`session/cookie.dart`）；
 - 前端仅负责采集与展示，不自行请求二维码内的 URL。
-- 图片上传识别：上传的二维码截图由前端本地解码（`BarcodeDetector` 优先、`jsQR` 降级，见 §3.2.2），图片不离开浏览器、不上传服务器（单图 ≤ 5MB；超大图先等比缩到 ≤ 2048px 再解码）；识别出的 URL 仍走本节统一校验与签到流程。
+- 图片上传识别：上传的二维码截图由前端本地解码（`BarcodeDetector` 优先、`jsQR` 降级，见 SPEC.md §3.2.2），图片不离开浏览器、不上传服务器（单图 ≤ 5MB；超大图先等比缩到 ≤ 2048px 再解码）；识别出的 URL 仍走本节统一校验与签到流程。
 
 ---
 
-## 6. 后端模块与关键类型（草案）
+## 6. 后端模块与关键类型
 
 ```
 backend/src/
-├── main.rs           # 路由组装、中间件、启动
-├── config.rs         # 环境变量、雨课堂域名白名单、会话 TTL、验证码 CaptchaAppId（2091064951）
+├── main.rs           # 路由组装、日志双通道（stdout + 按天滚动文件）、启动
+├── config.rs         # 环境变量、雨课堂域名白名单、会话 TTL、验证码 CaptchaAppId（2091064951）、Limits
 ├── error.rs          # AppError + 业务错误码（含雨课堂 51203 映射）
-├── auth/             # 登录代理（密码/短信/微信扫码长轮询，无需验证码组件）、雨课堂客户端、Bearer 管理
-├── courses.rs        # F5：on-lesson ∩ learning_list 透传
-├── signin/           # 二维码校验(§5)、scan+checkin 流程
-├── ws/               # ws_hub、plaza
-└── models.rs         # Room / RoomMeta / 消息类型
+├── auth/             # routes（密码/短信/扫码登录 + me/logout）、token（签名 cookie）、yk_client（雨课堂客户端）
+├── courses/          # F5：on-lesson ∩ learning_list 透传
+├── signin/           # validate（二维码校验 §5）、client_ext、routes（scan+checkin 流程）
+├── wechat/           # client（access_token/jsapi_ticket 缓存）、routes（status + jssdk-signature）
+└── ws/               # hub（房间状态机）、routes（/ws + 房间/广场 REST）、models（Room/RoomMeta/消息类型）
 ```
 
 关键类型（节选）：
@@ -243,7 +245,7 @@ struct Limits {
 }
 ```
 
-- 建房/加房/收消息路径上逐项检查；历史消息全保留但有界（每频道 FIFO ≤ 100 条），广播 channel 有界 → 内存占用有确定上界：`100 房间 × 100 条 × ~0.5KB ≈ 5MB` 最坏情况，2G 机器无压力。
+- 建房/加房/收消息路径上逐项检查；历史消息全保留但有界（每频道 FIFO ≤ 100 条），广播 channel 有界 → 内存占用有确定上界：`100 房间 × 100 条 × ~0.5KB ≈ 5MB` 最坏情况，占用可忽略。
 - 会话：签名 cookie（`user_id` + `exp` + HMAC），14 天滑动续期；登出即清除 cookie。
 
 ### 6.1 凭证与会话（无数据库）
@@ -268,12 +270,12 @@ frontend/src/
 │   ├── worker.ts      # SharedWorker 脚本：同源所有标签页共享一条连接
 │   └── client.ts      # WsHandle：优先 SharedWorker，降级 BroadcastChannel + localStorage
 │                      #   选主（TTL 4s）；leader 直驱连接（BC 不回显发送者）；getWs() 单例
-├── lib/          # qr-scan（相机 BarcodeDetector→zxing、图片 BarcodeDetector→jsQR）、room-link 短链、use-now 倒计时
-├── pages/        # Login / Plaza（首页：搜索+房间卡片+创建/加入对话框）/ Room（路由 /r/{房间号}：全屏扫码分享、签到码列表）
-├── components/   # Modal（对话框基础组件，遮罩/Esc 关闭）
+├── lib/          # qr-scan（BarcodeDetector→jsQR）、sign-url 预校验（与后端白名单一致）、room-link 短链、use-now 倒计时、wechat（JS-SDK 封装，含 VITE_WX_DEBUG 开关）
+├── pages/        # Login / Plaza（首页：搜索+房间卡片+创建/加入对话框）/ Room（路由 /r/{房间号}：全屏扫码分享、签到码列表）/ Courses（F5 当前课程）
+├── components/   # Modal（对话框基础组件，遮罩/Esc 关闭）、IcpFooter（仅在配置 VITE_ICP_BEIAN 时渲染）
 ├── stores/       # zustand: auth store；room store（服务端帧 → UI 状态的纯 reducer，消息 expire_at 倒计时过滤）
 ├── captcha.ts    # 腾讯验证码弹窗（TJCaptcha，AppId 2091064951）
-└── config.ts     # VITE_API_BASE_URL / 验证码 AppId 兜底
+└── config.ts     # VITE_API_BASE_URL / VITE_CAPTCHA_APP_ID 兜底 / VITE_ICP_BEIAN
 ```
 
 - 房间页二维码内容展示带 `expire_at` 倒计时，到期自动隐藏（与后端"消失"语义一致）；
@@ -315,7 +317,7 @@ services:
   - gzip 显式声明 `gzip_types`（nginx 默认只压 `text/html`）+ `gzip_vary on`，并开 `gzip_static on`（构建期由 `vite-plugin-compression2` 生成 `.gz` 直出，省运行时 CPU）；
   - `/assets/` 长缓存 `public, max-age=31536000, immutable`，`index.html` 强制 `no-cache`（发版即生效）；
   - SPA `try_files $uri $uri/ /index.html`；
-- **2G 机器**：compose 限制内存（backend ≤ 512M / frontend ≤ 128M），宿主另开 swap 兜底（命令见 README 部署章节）；
+- **容器内存上限**：compose 限制 backend ≤ 512M / frontend ≤ 128M——该上限按我们开发验证所用的 2 核 2G 机器设定，只是防单容器耗尽宿主的安全护栏，可按宿主规格调整；内存偏小的机器可另开 swap 兜底（命令见 README 部署章节）；
 - **运行时配置**：根 `.env` 一个文件同时承担 compose 变量插值（`build.args`）与 `backend` 容器环境变量注入（`env_file`）两个角色；缺 `.env` 时 compose 直接报错，避免静默回落到不安全的 `dev-secret`；
 - 后端镜像**非 root 运行**（uid 10001），`LOG_DIR=/app/logs` 由命名卷挂载。
 
@@ -323,5 +325,5 @@ services:
 
 ## 9. Git 分支规范
 
-- 主分支统一使用 **`main`**（本仓库已从 `master` 改名）；
-- 功能开发按 `feat/<name>` 短分支，合并回 `main`。
+- 双分支模型：**`main`**（生产，受保护）+ **`dev`**（集成，受保护），两者均只允许 PR 合并、禁止直接 push；
+- 开发一律从最新 `dev` 拉短分支（`feat/` `fix/` `docs/` `chore/` + 简短描述），提 PR **先合并回 `dev`**（squash）；准备发版时提 **PR `dev` → `main`**（merge commit），合并后删除短分支。详见 `docs/LINTER.md` §5。
