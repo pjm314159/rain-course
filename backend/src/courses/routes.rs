@@ -11,7 +11,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::json;
 
-use crate::auth::routes::{AppState, extract_sid};
+use crate::auth::routes::{AppState, extract_sid, resolve_yk_cookie};
 use crate::auth::token;
 use crate::error::AppError;
 
@@ -25,26 +25,42 @@ async fn courses(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    // ① 本站会话
-    let sid = extract_sid(&headers).ok_or(AppError::Unauthorized)?;
-    let user_id = token::verify(&sid, now_unix(), &st.config.server_secret)
-        .map_err(|_| AppError::Unauthorized)?;
+    // ① 本站会话（三条路都汇成 40101，必须靠日志区分：sid 缺失 / sid 校验失败 / 内存无雨课堂会话 / 上游 50000）
+    let Some(sid) = extract_sid(&headers) else {
+        tracing::warn!("courses: 请求未携带 sid cookie");
+        return Err(AppError::Unauthorized);
+    };
+    let user_id = match token::verify(&sid, now_unix(), &st.config.server_secret) {
+        Ok(id) => id,
+        Err(e) => {
+            // 只记 invalid/expired 原因，绝不记录 sid 本身
+            tracing::warn!(reason = %e, "courses: sid 校验未通过");
+            return Err(AppError::Unauthorized);
+        }
+    };
 
-    // ② 雨课堂会话（重启后丢失 → 引导重新登录）
-    let cookie = st
-        .sessions
-        .read()
-        .expect("session lock poisoned")
-        .get(&user_id)
-        .cloned()
-        .ok_or(AppError::Unauthorized)?;
+    // ② 雨课堂凭证：浏览器 HttpOnly cookie（重启不丢）优先，内存表兜底；两者皆无 → 引导重新登录
+    let Some(cookie) = resolve_yk_cookie(&st, &headers, user_id) else {
+        tracing::warn!(user_id, "courses: 无雨课堂凭证（需重新登录）");
+        return Err(AppError::Unauthorized);
+    };
 
     // ③ on-lesson ∩ learning_list 实时透传
-    let courses = st
-        .yk
-        .on_lesson_courses(&cookie)
-        .await
-        .map_err(map_session_error)?;
+    let courses = st.yk.on_lesson_courses(&cookie).await.map_err(|e| {
+        match &e {
+            AppError::Upstream {
+                upstream_code,
+                message,
+            } => tracing::warn!(
+                user_id,
+                upstream_code,
+                message = %message,
+                "courses: 上游拒绝（雨课堂会话可能已失效）"
+            ),
+            other => tracing::error!(user_id, error = %other, "courses: 上游调用失败"),
+        }
+        map_session_error(e)
+    })?;
 
     Ok(Json(json!({
         "code": 0, "msg": "ok",
@@ -82,6 +98,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::auth::yk_client::YkClient;
+    use crate::auth::yk_session;
     use crate::config::Config;
 
     fn app_with(yk_base: &str, rain_cookie: Option<&str>) -> Router {
@@ -172,9 +189,70 @@ mod tests {
 
     #[tokio::test]
     async fn without_rain_session_is_unauthorized() {
+        // 本站 sid 有效、浏览器也没带 yk_session、内存表为空 → 引导重新登录
         let server = MockServer::start().await;
         let resp = get_courses(app_with(&server.uri(), None), Some(&sid_cookie(42))).await;
         assert_eq!(body_json(resp).await["code"], 40101);
+    }
+
+    #[tokio::test]
+    async fn yk_session_cookie_survives_backend_restart() {
+        // 核心回归：后端重启清空内存表，但浏览器仍持有 yk_session cookie → 课程照常
+        let server = MockServer::start().await;
+        mount_upstream(
+            &server,
+            learning_ok(),
+            json!({"code": 0, "msg": "", "data": {"onLessonClassrooms": [
+                {"courseId": "1001", "lessonId": 777}
+            ]}}),
+        )
+        .await;
+
+        let cookie = format!(
+            "{}; yk_session={}",
+            sid_cookie(42),
+            yk_session::encode("sessionid=held-by-browser")
+        );
+        let resp = get_courses(app_with(&server.uri(), None), Some(&cookie)).await;
+        let v = body_json(resp).await;
+        assert_eq!(v["code"], 0);
+        assert_eq!(v["data"]["courses"][0]["course_id"], 1001);
+    }
+
+    #[tokio::test]
+    async fn yk_session_cookie_takes_precedence_over_stale_memory() {
+        // cookie 优先：浏览器持有效凭证时，即使内存表有旧值也用 cookie 里的
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v/course_meta/learning_list/"))
+            .and(wiremock::matchers::header(
+                "cookie",
+                "sessionid=from-browser",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(learning_ok()))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v3/classroom/on-lesson"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    json!({"code": 0, "msg": "", "data": {"onLessonClassrooms": []}}),
+                ),
+            )
+            .mount(&server)
+            .await;
+
+        let cookie = format!(
+            "{}; yk_session={}",
+            sid_cookie(42),
+            yk_session::encode("sessionid=from-browser")
+        );
+        let resp = get_courses(
+            app_with(&server.uri(), Some("sessionid=from-memory")),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(body_json(resp).await["code"], 0);
     }
 
     #[tokio::test]

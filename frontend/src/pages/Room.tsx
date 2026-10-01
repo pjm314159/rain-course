@@ -13,6 +13,7 @@ import { submitSign } from '../api/sign'
 import { fetchJssdkSignature, fetchWechatStatus } from '../api/wechat'
 import { decodeQrFromImage, startQrScan, type ScannerHandle } from '../lib/qr-scan'
 import { inviteLink } from '../lib/room-link'
+import { claimSignOnce } from '../lib/sign-once'
 import { isYuketangSignUrl } from '../lib/sign-url'
 import { isWechatBrowser, wechatScanQrCode } from '../lib/wechat'
 import { useNow } from '../lib/use-now'
@@ -109,15 +110,16 @@ function JoinView({ id }: { id: number }) {
   )
 }
 
-/** 「收到消息立即签到」开关（localStorage 持久化，默认关：点击 URL 框才签到） */
+/** 「收到消息立即签到」开关（localStorage 持久化，默认开：收到即签，关闭后点击 URL 框才签到） */
 const AUTO_SIGN_KEY = 'rain-course.auto_sign'
 
 function useAutoSign(): [boolean, (v: boolean) => void] {
   const [on, setOn] = useState<boolean>(() => {
     try {
-      return localStorage.getItem(AUTO_SIGN_KEY) === '1'
+      // 默认开：只有显式关过（'0'）才算关
+      return localStorage.getItem(AUTO_SIGN_KEY) !== '0'
     } catch {
-      return false
+      return true
     }
   })
   const set = (v: boolean) => {
@@ -454,11 +456,13 @@ function SettingsPanel({
   )
 }
 
-/** 把二维码内容推送给全房间（相机扫码与相册识别共用） */
+/** 把二维码内容推送给全房间（相机扫码、相册识别、微信扫一扫共用）；扫码者本人也立即签到 */
 function pushQr(raw: string) {
   const room = useRoom.getState().room
   if (room === null) return
   getWs().send({ type: 'share_qr', room, raw })
+  // 自己扫的码自己也要签（不看开关）；先认领台账，回显触发的自动签到就不会再签一次
+  if (claimSignOnce(raw, useAuth.getState().userId ?? 0)) void signAndBroadcast(raw)
 }
 
 /** 识别到的内容推送到房间前的预校验提示（与后端 share_qr 拒绝文案一致） */
@@ -610,10 +614,8 @@ function InRoomView() {
       .catch(() => setWxAvailable(false))
   }, [inWechat])
 
-  // 自动签到：监听 qr_update 新消息，开启时立即提交（去重，只签一次）
-  // 只处理尾部新增（消息对象引用稳定、裁剪只动队首），避免每次事件都重建全量 Set
-  const signedRef = useRef(new Set<string>())
-  const lastSeenRef = useRef<QrMsg | null>(null)
+  // 自动签到（默认开）：只签「最新一条未过期」的码，不对进房时的历史消息逐条补签；
+  // 台账（localStorage，同源标签页共享）保证多标签页、重进房、自身回显都不会重复提交
   const autoSignRef = useRef(autoSign)
   useEffect(() => {
     autoSignRef.current = autoSign
@@ -621,18 +623,10 @@ function InRoomView() {
   useEffect(() => {
     return useRoom.subscribe((s) => {
       if (!autoSignRef.current) return
-      const msgs = s.messages
-      const prevLast = lastSeenRef.current
-      // 上一批的最后一条已被裁掉（未找到）时从头遍历，signedRef 保证不会重复提交
-      const from = prevLast === null ? 0 : msgs.lastIndexOf(prevLast) + 1
-      for (let i = from; i < msgs.length; i += 1) {
-        const m = msgs[i]
-        const key = qrKey(m)
-        if (signedRef.current.has(key)) continue
-        signedRef.current.add(key)
-        void signAndBroadcast(m.raw)
-      }
-      lastSeenRef.current = msgs.length > 0 ? msgs[msgs.length - 1] : null
+      const latest = s.messages.at(-1)
+      if (latest === undefined || latest.expire_at <= Date.now()) return
+      if (!claimSignOnce(latest.raw, useAuth.getState().userId ?? 0)) return
+      void signAndBroadcast(latest.raw)
     })
   }, [])
 

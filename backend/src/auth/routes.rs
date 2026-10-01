@@ -9,7 +9,7 @@ use std::sync::{Arc, RwLock};
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::{AppendHeaders, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 
 use super::token;
 use super::yk_client::{self, YkClient};
+use super::yk_session;
 use crate::config::Config;
 use crate::error::AppError;
 use crate::wechat::client::WechatClient;
@@ -75,6 +76,19 @@ pub fn extract_sid(headers: &HeaderMap) -> Option<String> {
         }
     }
     None
+}
+
+/// 取雨课堂凭证：浏览器 HttpOnly cookie（`yk_session`，重启不丢）优先，
+/// 内存表兜底（兼容升级前已登录、浏览器还没种上该 cookie 的旧会话）。
+pub fn resolve_yk_cookie(st: &AppState, headers: &HeaderMap, user_id: i64) -> Option<String> {
+    if let Some(c) = yk_session::extract(headers) {
+        return Some(c);
+    }
+    st.sessions
+        .read()
+        .expect("session lock poisoned")
+        .get(&user_id)
+        .cloned()
 }
 
 fn now_unix() -> u64 {
@@ -181,24 +195,28 @@ async fn qr_poll(
     }
 }
 
-/// 登录成功公共尾部：存会话 → 签发 sid cookie → 返回 user_id（data 可携带额外字段）
+/// 登录成功公共尾部：存内存表（兜底）→ 签发 sid cookie 与 yk_session cookie → 返回 user_id
+///
+/// 双 cookie：`sid`（本站会话，滑动续期）+ `yk_session`（雨课堂凭证，浏览器持久化，
+/// 与雨课堂官网把 sessionid 存 HttpOnly cookie 同策；后端重启不再要求重新登录）
 fn session_response(st: &AppState, session: yk_client::Session, mut data: Value) -> Response {
     st.sessions
         .write()
         .expect("session lock poisoned")
         .insert(session.user_id, session.cookie_header.clone());
-    let sid = token::issue(
-        session.user_id,
-        now_unix() + st.config.cookie_ttl_secs,
-        &st.config.server_secret,
-    );
+    let ttl = st.config.cookie_ttl_secs;
+    let sid = token::issue(session.user_id, now_unix() + ttl, &st.config.server_secret);
     data["user_id"] = json!(session.user_id);
+    // AppendHeaders：同名 Set-Cookie 需 append（普通数组是 insert 语义，两个 cookie 会互相覆盖）
     (
         StatusCode::OK,
-        [(
-            header::SET_COOKIE,
-            session_cookie(&sid, st.config.cookie_ttl_secs),
-        )],
+        AppendHeaders([
+            (header::SET_COOKIE, session_cookie(&sid, ttl)),
+            (
+                header::SET_COOKIE,
+                yk_session::set_cookie_header(&session.cookie_header, ttl),
+            ),
+        ]),
         Json(json!({ "code": 0, "msg": "ok", "data": data })),
     )
         .into_response()
@@ -224,10 +242,13 @@ async fn me(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Result<Respo
 }
 
 async fn logout() -> Response {
-    // 删除本站 cookie：Max-Age=0（雨课堂凭证由会话过期/重启清理）
+    // 清除本站 cookie（sid 与 yk_session 都置 Max-Age=0；内存表条目由重启/过期自然清理）
     (
         StatusCode::OK,
-        [(header::SET_COOKIE, session_cookie("", 0))],
+        AppendHeaders([
+            (header::SET_COOKIE, session_cookie("", 0)),
+            (header::SET_COOKIE, yk_session::clear_cookie_header()),
+        ]),
         Json(json!({ "code": 0, "msg": "ok", "data": null })),
     )
         .into_response()
@@ -351,7 +372,7 @@ mod tests {
     // ---- /api/auth/logout ----
 
     #[tokio::test]
-    async fn logout_clears_cookie() {
+    async fn logout_clears_both_cookies() {
         let resp = app()
             .oneshot(
                 Request::builder()
@@ -363,14 +384,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let set_cookie = resp
+        let cookies: Vec<String> = resp
             .headers()
-            .get(header::SET_COOKIE)
-            .unwrap()
-            .to_str()
-            .unwrap();
-        assert!(set_cookie.starts_with("sid=;"));
-        assert!(set_cookie.contains("Max-Age=0"));
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(cookies.len(), 2);
+        assert!(cookies[0].starts_with("sid=;"));
+        assert!(cookies[0].contains("Max-Age=0"));
+        assert!(cookies[1].starts_with("yk_session=;"));
+        assert!(cookies[1].contains("Max-Age=0"));
     }
 
     // ---- /api/auth/login（wiremock 模拟雨课堂上游） ----
@@ -419,9 +443,49 @@ mod tests {
         assert_eq!(v["code"], 0);
         assert_eq!(v["data"]["user_id"], 42);
 
-        // Set-Cookie 里携带可验证的 sid
+        // Set-Cookie 里携带可验证的 sid 与 yk_session（雨课堂凭证持久化到浏览器）
         // （会话存储断言见下方独立测试）
         let _ = v;
+    }
+
+    #[tokio::test]
+    async fn login_sets_yk_session_cookie_with_rain_credentials() {
+        let server = mock_upstream_login_ok().await;
+        let resp = app_with(&server.uri())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/login")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({"account": "13800000000", "password": "pw", "ticket": "t", "rand": "r"})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let cookies: Vec<String> = resp
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        let yk_line = cookies
+            .iter()
+            .find(|c| c.starts_with("yk_session="))
+            .expect("yk_session cookie expected");
+        assert!(yk_line.contains("HttpOnly"));
+        assert!(yk_line.contains(&format!("Max-Age={}", 14 * 24 * 60 * 60)));
+        let value = yk_line
+            .split(';')
+            .next()
+            .unwrap()
+            .trim_start_matches("yk_session=");
+        assert_eq!(
+            yk_session::decode(value).as_deref(),
+            Some("sessionid=abc123; csrftoken=tok99")
+        );
     }
 
     #[tokio::test]
