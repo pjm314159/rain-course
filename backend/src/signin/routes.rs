@@ -14,7 +14,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::auth::routes::{AppState, extract_sid};
+use crate::auth::routes::{AppState, extract_sid, resolve_yk_cookie};
 use crate::auth::token;
 use crate::error::AppError;
 use crate::signin::validate::validate_qr_url;
@@ -41,14 +41,10 @@ async fn submit(
     let user_id = token::verify(&sid, now_unix(), &st.config.server_secret)
         .map_err(|_| AppError::Unauthorized)?;
 
-    // ② 雨课堂会话（重启后丢失 → 引导重新登录）
-    let cookie = st
-        .sessions
-        .read()
-        .expect("session lock poisoned")
-        .get(&user_id)
-        .cloned()
-        .ok_or(AppError::Unauthorized)?;
+    // ② 雨课堂凭证：浏览器 HttpOnly cookie（重启不丢）优先，内存表兜底；两者皆无 → 引导重新登录
+    let Some(cookie) = resolve_yk_cookie(&st, &headers, user_id) else {
+        return Err(AppError::Unauthorized);
+    };
 
     // ③ 内容安全校验：未通过绝不发起出站请求
     validate_qr_url(&body.url, &st.config.yk_allowed_hosts)
@@ -83,6 +79,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::auth::yk_client::YkClient;
+    use crate::auth::yk_session;
     use crate::config::Config;
 
     const VALID_URL: &str = "https://www.yuketang.cn/c/abc123";
@@ -184,7 +181,7 @@ mod tests {
 
     #[tokio::test]
     async fn without_rain_session_is_unauthorized() {
-        // 本站 sid 有效但服务重启丢了雨课堂 cookie → 引导重新登录
+        // 本站 sid 有效、浏览器也没带 yk_session、内存表为空 → 引导重新登录
         let server = mock_upstream().await;
         let resp = post_submit(
             app_with(&server.uri(), None),
@@ -193,6 +190,60 @@ mod tests {
         )
         .await;
         assert_eq!(body_json(resp).await["code"], 40101);
+    }
+
+    #[tokio::test]
+    async fn yk_session_cookie_survives_backend_restart() {
+        // 核心回归：后端重启清空内存表，但浏览器仍持有 yk_session cookie → 签到照常
+        let server = mock_upstream().await;
+        mount_scan_checkin(&server, 0, 0).await;
+        let cookie = format!(
+            "{}; yk_session={}",
+            sid_cookie(42),
+            yk_session::encode("sessionid=held-by-browser")
+        );
+        let resp = post_submit(app_with(&server.uri(), None), Some(&cookie), VALID_URL).await;
+        let v = body_json(resp).await;
+        assert_eq!(v["code"], 0);
+        assert_eq!(v["data"]["status"], "success");
+    }
+
+    #[tokio::test]
+    async fn yk_session_cookie_takes_precedence_over_stale_memory() {
+        // cookie 优先：浏览器持有效凭证时，即使内存表有旧值也用 cookie 里的
+        let server = mock_upstream().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/app/scan"))
+            .and(wiremock::matchers::header(
+                "cookie",
+                "sessionid=from-browser",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"code": 0, "msg": "", "data": {"value": 1}})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v3/lesson/checkin"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"code": 0, "msg": "", "data": {"lessonToken": "tk"}})),
+            )
+            .mount(&server)
+            .await;
+        let cookie = format!(
+            "{}; yk_session={}",
+            sid_cookie(42),
+            yk_session::encode("sessionid=from-browser")
+        );
+        let resp = post_submit(
+            app_with(&server.uri(), Some("sessionid=from-memory")),
+            Some(&cookie),
+            VALID_URL,
+        )
+        .await;
+        assert_eq!(body_json(resp).await["code"], 0);
     }
 
     #[tokio::test]
