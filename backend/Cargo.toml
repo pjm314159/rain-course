@@ -24,6 +24,7 @@ tracing-appender = "0.2"
 thiserror = "2"
 anyhow = "1"
 axum-extra = { version = "0.10", features = ["cookie"] }
+base64 = "0.22"
 hmac = "0.12"
 sha2 = "0.10"
 sha1 = "0.10"

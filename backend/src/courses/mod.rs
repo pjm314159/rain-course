@@ -37,10 +37,7 @@ impl YkClient {
             .send()
             .await
             .map_err(|e| AppError::Internal(e.into()))?;
-        let body: Value = resp
-            .json()
-            .await
-            .map_err(|e| AppError::Internal(e.into()))?;
+        let body = parse_upstream_json(resp, "learning_list").await?;
         fail_on_error_envelope(&body)?;
         Ok(body
             .get("data")
@@ -58,16 +55,42 @@ impl YkClient {
             .send()
             .await
             .map_err(|e| AppError::Internal(e.into()))?;
-        let envelope: Value = resp
-            .json()
-            .await
-            .map_err(|e| AppError::Internal(e.into()))?;
+        let envelope = parse_upstream_json(resp, "on-lesson").await?;
         let data = map_envelope(envelope)?;
         Ok(data
             .get("onLessonClassrooms")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default())
+    }
+}
+
+/// 解析上游 JSON 响应：非 2xx 或解析失败时把 HTTP 状态与响应体片段写入日志，
+/// 否则上游的真实返回（如被重定向到登录页的 HTML）会丢失，只看到一句「内部错误」。
+/// 只记响应体（上游返回，不含凭证），绝不记录请求侧 cookie。
+async fn parse_upstream_json(resp: reqwest::Response, endpoint: &str) -> Result<Value, AppError> {
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    if !status.is_success() {
+        tracing::warn!(endpoint = %endpoint, status = %status, body = %body_snippet(&text), "上游返回非 2xx");
+    }
+    serde_json::from_str(&text).map_err(|e| {
+        tracing::warn!(endpoint = %endpoint, status = %status, body = %body_snippet(&text), "上游响应不是 JSON");
+        AppError::Internal(e.into())
+    })
+}
+
+/// 日志用响应体片段：截断到 500 字符，避免刷爆日志
+fn body_snippet(text: &str) -> String {
+    if text.chars().count() <= 500 {
+        text.to_string()
+    } else {
+        let mut s: String = text.chars().take(500).collect();
+        s.push_str("…(截断)");
+        s
     }
 }
 
