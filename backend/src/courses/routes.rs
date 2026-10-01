@@ -25,26 +25,54 @@ async fn courses(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    // ① 本站会话
-    let sid = extract_sid(&headers).ok_or(AppError::Unauthorized)?;
-    let user_id = token::verify(&sid, now_unix(), &st.config.server_secret)
-        .map_err(|_| AppError::Unauthorized)?;
+    // ① 本站会话（三条路都汇成 40101，必须靠日志区分：sid 缺失 / sid 校验失败 / 内存无雨课堂会话 / 上游 50000）
+    let Some(sid) = extract_sid(&headers) else {
+        tracing::warn!("courses: 请求未携带 sid cookie");
+        return Err(AppError::Unauthorized);
+    };
+    let user_id = match token::verify(&sid, now_unix(), &st.config.server_secret) {
+        Ok(id) => id,
+        Err(e) => {
+            // 只记 invalid/expired 原因，绝不记录 sid 本身
+            tracing::warn!(reason = %e, "courses: sid 校验未通过");
+            return Err(AppError::Unauthorized);
+        }
+    };
 
-    // ② 雨课堂会话（重启后丢失 → 引导重新登录）
-    let cookie = st
+    // ② 雨课堂会话（日志区分：内存中无会话通常是后端重启所致）
+    let cookie = match st
         .sessions
         .read()
         .expect("session lock poisoned")
         .get(&user_id)
         .cloned()
-        .ok_or(AppError::Unauthorized)?;
+    {
+        Some(c) => c,
+        None => {
+            tracing::warn!(
+                user_id,
+                "courses: 内存中无雨课堂会话（后端重启会清空，需重新登录）"
+            );
+            return Err(AppError::Unauthorized);
+        }
+    };
 
     // ③ on-lesson ∩ learning_list 实时透传
-    let courses = st
-        .yk
-        .on_lesson_courses(&cookie)
-        .await
-        .map_err(map_session_error)?;
+    let courses = st.yk.on_lesson_courses(&cookie).await.map_err(|e| {
+        match &e {
+            AppError::Upstream {
+                upstream_code,
+                message,
+            } => tracing::warn!(
+                user_id,
+                upstream_code,
+                message = %message,
+                "courses: 上游拒绝（雨课堂会话可能已失效）"
+            ),
+            other => tracing::error!(user_id, error = %other, "courses: 上游调用失败"),
+        }
+        map_session_error(e)
+    })?;
 
     Ok(Json(json!({
         "code": 0, "msg": "ok",
